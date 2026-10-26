@@ -89,12 +89,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	persist := cfg.Prompt == "" || cfg.Resume != ""
 
 	runner, err := agentadk.New(ctx, agentadk.Config{
-		Model:        chatModel,
-		Tools:        toolList,
-		SystemPrompt: systemPrompt,
-		MaxSteps:     cfg.MaxSteps,
-		Stream:       !cfg.NoStream,
-		UI:           u,
+		Model:         chatModel,
+		Tools:         toolList,
+		SystemPrompt:  systemPrompt,
+		MaxSteps:      cfg.MaxSteps,
+		ContextTokens: cfg.ContextTokens,
+		Stream:        !cfg.NoStream,
+		UI:            u,
 	})
 	if err != nil {
 		u.Error("error: %v", err)

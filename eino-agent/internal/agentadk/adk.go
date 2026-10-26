@@ -10,22 +10,25 @@ import (
 	"strings"
 
 	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/adk/middlewares/summarization"
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/compose"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 )
 
 // Config configures the ADK runner.
 type Config struct {
-	Model        model.ToolCallingChatModel
-	Tools        []tool.BaseTool
-	SystemPrompt string
-	MaxSteps     int
-	Stream       bool
-	UI           *ui.UI
+	Model         model.ToolCallingChatModel
+	Tools         []tool.BaseTool
+	SystemPrompt  string
+	MaxSteps      int
+	ContextTokens int
+	Stream        bool
+	UI            *ui.UI
 }
 
 // Agent wraps an ADK ChatModelAgent and Runner.
@@ -43,6 +46,9 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 	if cfg.MaxSteps <= 0 {
 		cfg.MaxSteps = 30
 	}
+	if cfg.ContextTokens <= 0 {
+		cfg.ContextTokens = contextmgr.DefaultContextTokens
+	}
 
 	toolNames, err := toolNames(ctx, cfg.Tools)
 	if err != nil {
@@ -50,6 +56,25 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 	}
 	unknownHandler := func(_ context.Context, name, _ string) (string, error) {
 		return fmt.Sprintf("ERROR: unknown tool %q; available tools: %s", name, strings.Join(toolNames, ", ")), nil
+	}
+
+	// ADK summarization runs first when the conversation grows past 2/3 of
+	// the budget. The deterministic GenModelInput below is the hard cap: even
+	// if summarization is skipped or fails to shrink enough, the model never
+	// receives more than cfg.ContextTokens (approximately).
+	summaryTrigger := cfg.ContextTokens * 2 / 3
+	if summaryTrigger < 1024 {
+		summaryTrigger = 1024
+	}
+	summarizer, err := summarization.New(ctx, &summarization.Config{
+		Model: cfg.Model,
+		Trigger: &summarization.TriggerCondition{
+			ContextTokens: summaryTrigger,
+		},
+		UserInstruction: "Summarize this coding-agent conversation. Preserve the user's goals, decisions, file paths changed, commands run and their results, unresolved errors, and next steps. Drop raw tool output; keep only conclusions. Be concise.",
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create ADK summarization middleware: %w", err)
 	}
 
 	chatAgent, err := adk.NewChatModelAgent(ctx, &adk.ChatModelAgentConfig{
@@ -65,6 +90,14 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 			},
 		},
 		MaxIterations: cfg.MaxSteps,
+		Handlers: []adk.ChatModelAgentMiddleware{
+			&fallbackSummarizer{TypedBaseChatModelAgentMiddleware: &adk.TypedBaseChatModelAgentMiddleware[*schema.Message]{}, inner: summarizer, ui: cfg.UI},
+		},
+		GenModelInput: func(_ context.Context, instruction string, input *adk.AgentInput) ([]*schema.Message, error) {
+			msgs := contextmgr.WithSystem(instruction, input.Messages)
+			msgs = contextmgr.Compact(msgs, cfg.ContextTokens)
+			return msgs, nil
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create ADK chat model agent: %w", err)
@@ -75,6 +108,29 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 		EnableStreaming: cfg.Stream,
 	})
 	return &Agent{runner: runner, ui: cfg.UI}, nil
+}
+
+// fallbackSummarizer turns a failed summarization model call into a warning
+// and lets the deterministic GenModelInput cap handle the overflow. Context
+// cancellation is never swallowed.
+type fallbackSummarizer struct {
+	*adk.TypedBaseChatModelAgentMiddleware[*schema.Message]
+	inner adk.ChatModelAgentMiddleware
+	ui    *ui.UI
+}
+
+func (f *fallbackSummarizer) BeforeModelRewriteState(ctx context.Context, state *adk.ChatModelAgentState, mc *adk.ModelContext) (context.Context, *adk.ChatModelAgentState, error) {
+	newCtx, newState, err := f.inner.BeforeModelRewriteState(ctx, state, mc)
+	if err == nil {
+		return newCtx, newState, nil
+	}
+	if ctx.Err() != nil {
+		return ctx, nil, err
+	}
+	if f.ui != nil {
+		f.ui.Warn("context summarization failed; falling back to deterministic compaction: %v", err)
+	}
+	return ctx, state, nil
 }
 
 // RunTurn executes one user turn and consumes the ADK event stream to

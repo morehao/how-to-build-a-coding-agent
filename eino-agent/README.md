@@ -68,7 +68,7 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 | `--model` | 模型名；Ark 填 endpoint id | 必填，或读 provider 对应环境变量 |
 | `--base-url` | OpenAI 兼容或 Anthropic 代理地址 | provider 默认 |
 | `--workspace` | 工作区根目录 | 当前目录 |
-| `--max-steps` | ReAct 图最大步数 | `30` |
+| `--max-steps` | ReAct 图最大步数 / ADK 最大迭代轮数 | `30` |
 | `--history-bytes` | 持久化历史预算（字节，近似值） | `262144` |
 | `--context-tokens` | 单次模型调用的近似 token 预算；超出时压缩输入 | `32000` |
 | `--permission-mode` | `ask` / `read-only` / `yolo` | `ask` |
@@ -101,18 +101,32 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 
 ## 上下文管理
 
-上下文分两层处理：
+两个入口都先把会话历史控制在 `--history-bytes` 以内，再对**单次模型调用**做上下文控制；区别在于单轮策略：
 
-1. **单轮模型调用**：`MessageModifier` 在每次 ChatModel 调用前执行 `internal/contextmgr` 的确定性压缩。顺序是：
-   - 保留 system prompt、最近的 3 个 tool 结果和当前 user 消息；
-   - 更旧的 tool 结果替换成 `[tool output omitted ...]` 占位符，旧的 tool call 参数也会压缩；
-   - 仍然超预算时，按 user turn 从旧到新丢弃整块，保证 tool call / tool result 不被拆散；
-   - 仍然超预算时，截断最大的消息，并标注 `[truncated to save context]`。
-2. **跨轮持久化**：`--history-bytes` 控制保存到 session 的历史总量，`session.Trim` 优先丢掉最旧的消息，并保证第一条是 user。
+### ReAct 分支：确定性压缩
 
-ReAct 分支的压缩是**确定性**的，不额外调用模型，因此没有摘要成本，也不会因为摘要失败而中断任务。token 数是保守估算（约 `bytes/3`），不是 provider 的精确 tokenizer；默认 32000 对多数模型是安全值，模型上下文更大时可以调高。
+`MessageModifier` 在每次 ChatModel 调用前执行 `internal/contextmgr`：
 
-被省略/截断的内容会在 prompt 里提示模型：需要细节就带更小的 `limit` / `max_results` 重新调用工具。
+1. 保留 system prompt、最近的 3 个 tool 结果和当前 user 消息；
+2. 更旧的 tool 结果替换成 `[tool output omitted ...]` 占位符，旧的 tool call 参数也会压缩；
+3. 仍然超预算时，按 user turn 从旧到新丢弃整块，保证 tool call / tool result 不被拆散；
+4. 仍然超预算时，截断最大的消息，并标注 `[truncated to save context]`。
+
+这是**确定性**压缩，不额外调用模型，没有摘要成本，也不会因为摘要失败而中断任务。
+
+### ADK 分支：摘要 + 确定性兜底
+
+ADK 入口使用 Eino ADK 自带的 `summarization` middleware：
+
+- 当估算 token 超过 `--context-tokens` 的 **2/3** 时，调用同一个模型生成摘要；摘要 prompt 要求保留用户目标、已改文件、执行过的命令与结果、未解决错误和下一步；
+- 摘要后仍然超预算，或摘要没有触发时，`GenModelInput` 再用 `internal/contextmgr` 做硬上限压缩，保证模型输入不超过 `--context-tokens`；
+- 摘要本身会产生一次额外模型调用；如果摘要调用失败，会打印警告并退回确定性压缩，而不是让本轮直接失败。
+
+### 共同点与限制
+
+- 跨轮持久化由 `session.Trim` 处理：`--history-bytes` 是保存到 session 的历史总量，优先丢掉最旧的消息，并保证第一条是 user；
+- token 数是保守估算（约 `bytes/3`），不是 provider 的精确 tokenizer；默认 32000 对多数模型是安全值，模型上下文更大时可以调高；
+- 被省略/截断的内容会在 prompt 里提示模型：需要细节就带更小的 `limit` / `max_results` 重新调用工具。
 
 ## 权限与安全
 
@@ -185,7 +199,8 @@ ADK 路径的一轮对话：
 ```text
 user input
   → session history + Instruction (ADK ChatModelAgent)
-  → adk.Runner.Run → AgentEvent 流
+  → adk.Runner.Run（summarization middleware 可按预算摘要）
+  → AgentEvent 流
       ├─ assistant 流式事件 → 终端
       ├─ tool result 事件  → 终端
       └─ 最后一个 assistant 消息 → 返回值
@@ -213,7 +228,7 @@ go test ./...
 测试不需要 API key：
 
 - `internal/agent` 用一个脚本化的 fake `ToolCallingChatModel` 驱动**真实 ReAct 图 + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复、上下文压缩；
-- `internal/agentadk` 用同一类 fake model 驱动**真实 ADK Runner + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复；
+- `internal/agentadk` 用同一类 fake model 驱动**真实 ADK Runner + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复、摘要触发；
 - `internal/contextmgr` 覆盖 token 估算、旧 tool 结果占位、旧 turn 丢弃、tool call 配对和超大消息截断；
 - `internal/tools` 覆盖读、写、列目录、bash 审批/超时/截断、搜索 fallback；
 - `internal/workspace` 覆盖路径逃逸和 symlink 逃逸；
@@ -224,7 +239,7 @@ go test ./...
 
 - 这是教学/演示向的简化实现，不是 Claude Code / Codex 的完整替代品；
 - 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引；
-- ReAct 分支只做确定性上下文压缩，不做 LLM 摘要；ADK 分支使用 ADK 的 summarization middleware；
+- ReAct 分支只做确定性上下文压缩；ADK 分支摘要失败会降级为确定性压缩，但摘要本身仍有一次额外模型调用成本；
 - `bash` 超时依赖 `exec.CommandContext`，被杀的是 shell 进程本身，极端情况下子进程可能残留；
 - 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证；
 - ADK 版目前是单 agent 线性事件流，没有使用 ADK 的 multi-agent、checkpoint、interrupt/resume 能力；这些是后续可扩展点。

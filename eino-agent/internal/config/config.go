@@ -86,7 +86,7 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&modelName, "model", "", "model name (or endpoint id for ark)")
 	fs.StringVar(&baseURL, "base-url", "", "OpenAI-compatible or Anthropic base URL")
 	fs.StringVar(&workspace, "workspace", "", "workspace directory (default: current directory)")
-	fs.IntVar(&maxSteps, "max-steps", 0, "maximum ReAct graph steps (default: 30)")
+	fs.IntVar(&maxSteps, "max-steps", 0, "maximum agent steps / ADK iterations (default: 30)")
 	fs.IntVar(&historyBytes, "history-bytes", 0, "conversation history budget in bytes (default: 262144)")
 	fs.IntVar(&contextTokens, "context-tokens", 0, "approximate token budget for one model call (default: 32000)")
 	fs.StringVar(&permissionMode, "permission-mode", "", "ask|read-only|yolo (default: ask)")
@@ -221,7 +221,7 @@ Flags:
   --model string            model name; for ark, the endpoint id
   --base-url string         OpenAI-compatible or Anthropic base URL
   --workspace string        workspace directory (default: current directory)
-  --max-steps int           maximum ReAct graph steps (default: 30)
+  --max-steps int           maximum agent steps / ADK iterations (default: 30)
   --history-bytes int       session history budget (default: 262144)
   --context-tokens int      approximate token budget per model call (default: 32000)
   --permission-mode string  ask|read-only|yolo (default: ask)

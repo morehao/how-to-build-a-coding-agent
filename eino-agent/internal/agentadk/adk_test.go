@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -18,22 +19,37 @@ import (
 )
 
 type fakeState struct {
-	mu        sync.Mutex
-	calls     int
-	script    []*schema.Message
-	lastInput []*schema.Message
+	mu           sync.Mutex
+	calls        int
+	summaryCalls int
+	script       []*schema.Message
+	lastInput    []*schema.Message
 }
 
 func (s *fakeState) next(input []*schema.Message) *schema.Message {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastInput = input
-	idx := s.calls
+	if isSummaryPrompt(input) {
+		s.calls++
+		s.summaryCalls++
+		return schema.AssistantMessage("SUMMARY: the user inspected the fixture and the next step is to finish.", nil)
+	}
+	idx := s.calls - s.summaryCalls
 	if idx >= len(s.script) {
 		idx = len(s.script) - 1
 	}
 	s.calls++
 	return s.script[idx]
+}
+
+func isSummaryPrompt(input []*schema.Message) bool {
+	for _, m := range input {
+		if m != nil && strings.Contains(m.Content, "Summarize this coding-agent conversation") {
+			return true
+		}
+	}
+	return false
 }
 
 type fakeModel struct{ state *fakeState }
@@ -169,5 +185,119 @@ func TestADKToolErrorIsRecoverable(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("tool error not returned to model: %+v", state.lastInput)
+	}
+}
+
+func TestADKSummarizesLongContext(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < 18; i++ {
+		b.WriteString(strings.Repeat("x", 1000))
+		b.WriteByte('\n')
+	}
+	if err := os.WriteFile(dir+"/big.txt", []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolList, err := tools.New(context.Background(), tools.Options{Workspace: ws, Mode: "read-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]string{"path": "big.txt"})
+	script := []*schema.Message{
+		schema.AssistantMessage("", []schema.ToolCall{{
+			ID: "call-1", Type: "function",
+			Function: schema.FunctionCall{Name: "read_file", Arguments: string(args)},
+		}}),
+		schema.AssistantMessage("finished after summarization", nil),
+	}
+	state := &fakeState{script: script}
+	var out, errOut bytes.Buffer
+	a, err := New(context.Background(), Config{
+		Model: &fakeModel{state: state}, Tools: toolList, SystemPrompt: "test",
+		MaxSteps: 10, ContextTokens: 6000, Stream: false, UI: ui.New(&out, &errOut, false, false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, err := a.RunTurn(context.Background(), []*schema.Message{schema.UserMessage("inspect big.txt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(final.Content, "finished after summarization") {
+		t.Fatalf("final = %q", final.Content)
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.summaryCalls == 0 {
+		t.Fatalf("summarization did not run; calls=%d", state.calls)
+	}
+	if state.calls < 3 {
+		t.Fatalf("calls = %d, want >= 3", state.calls)
+	}
+}
+
+type summaryFailModel struct{ *fakeModel }
+
+func (m *summaryFailModel) Generate(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.Message, error) {
+	if isSummaryPrompt(input) {
+		return nil, errors.New("summary model unavailable")
+	}
+	return m.fakeModel.Generate(ctx, input, opts...)
+}
+
+func (m *summaryFailModel) Stream(ctx context.Context, input []*schema.Message, opts ...model.Option) (*schema.StreamReader[*schema.Message], error) {
+	if isSummaryPrompt(input) {
+		return nil, errors.New("summary model unavailable")
+	}
+	return m.fakeModel.Stream(ctx, input, opts...)
+}
+
+func TestADKSummarizationFailureFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	var b strings.Builder
+	for i := 0; i < 18; i++ {
+		b.WriteString(strings.Repeat("x", 1000))
+		b.WriteByte('\n')
+	}
+	if err := os.WriteFile(dir+"/big.txt", []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolList, err := tools.New(context.Background(), tools.Options{Workspace: ws, Mode: "read-only"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args, _ := json.Marshal(map[string]string{"path": "big.txt"})
+	state := &fakeState{script: []*schema.Message{
+		schema.AssistantMessage("", []schema.ToolCall{{
+			ID: "call-1", Type: "function",
+			Function: schema.FunctionCall{Name: "read_file", Arguments: string(args)},
+		}}),
+		schema.AssistantMessage("finished after fallback", nil),
+	}}
+	var out, errOut bytes.Buffer
+	a, err := New(context.Background(), Config{
+		Model: &summaryFailModel{fakeModel: &fakeModel{state: state}}, Tools: toolList, SystemPrompt: "test",
+		MaxSteps: 10, ContextTokens: 6000, Stream: false, UI: ui.New(&out, &errOut, false, false),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, err := a.RunTurn(context.Background(), []*schema.Message{schema.UserMessage("inspect big.txt")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(final.Content, "finished after fallback") {
+		t.Fatalf("final = %q", final.Content)
+	}
+	if !strings.Contains(out.String()+errOut.String(), "summarization failed") {
+		t.Fatalf("fallback warning missing: out=%q err=%q", out.String(), errOut.String())
 	}
 }

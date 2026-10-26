@@ -769,6 +769,7 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 | system prompt | `MessageModifier` | `ChatModelAgentConfig.Instruction` |
 | 工具循环 | ReAct 图内部 | ADK `Runner` 内部，`MaxIterations` 控制 |
 | 事件渲染 | Eino callbacks | 消费 `adk.AgentEvent`：assistant 流式事件逐块打印，tool 事件打印结果 |
+| 上下文 | `internal/contextmgr` 确定性压缩 | 额外加 ADK `summarization` middleware，摘要阈值取 `--context-tokens` 的 2/3 |
 | 会话/权限/工具 | 完全复用 | 完全复用 |
 
 实现约束：
@@ -776,6 +777,8 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 - `Runner.Run` 返回的迭代器必须消费到 `Next()` 返回 false，且 assistant 流事件要 `Close`；
 - ADK 的 `MaxIterations` 语义是模型生成轮数，与 ReAct 的图步数不完全等价，首版统一取 `--max-steps` 的值；
 - 工具业务错误仍然由 `internal/tools` 软化为 `ERROR: ...` 输出，ADK 图不会因文件不存在或用户拒绝命令而中断；
+- ADK 摘要触发后调用同一模型生成摘要，摘要 prompt 明确保留目标、改动文件、命令结果、错误和下一步；摘要失败时打印警告并退回 `GenModelInput` 的确定性压缩，不静默丢弃历史；
+- `GenModelInput` 用 `internal/contextmgr` 做硬上限兜底，保证摘要未触发或摘要后仍超预算时输入不超过 `--context-tokens`；
 - ADK 的 multi-agent、checkpoint、interrupt/resume 未启用，留作后续扩展。
 
 ---
@@ -797,6 +800,7 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 | `schema.StreamReaderFromArray`（测试用） | `schema/stream.go:461` |
 | `adk.NewChatModelAgent`（备选） | `adk/chatmodel.go:503` |
 | `adk.NewRunner`（备选） | `adk/runner.go:89` |
+| ADK summarization middleware | `adk/middlewares/summarization/summarization.go:272` |
 
 Eino-ext（本地源码根：`~/Documents/study/ai/agent-framework/eino-ext`）：
 
