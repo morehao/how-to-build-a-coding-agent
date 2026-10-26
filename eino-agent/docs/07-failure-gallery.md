@@ -143,3 +143,23 @@
 **修复**：每个工具调用后补一个最终 `content` step；或增加步骤。
 
 **测试**：这是测试失败提示，不是产品 bug；保留清晰错误信息即可。
+
+## 15. skill fork 递归/越权
+
+**症状**：只读子 agent 加载一个 `context: fork` 的 skill 后，又启动了一层子 agent；或者 skill 试图借 fork 获得写权限。
+
+**根因**：父 agent 和子 agent 共享了同一个 `*skill.Tool`，父 agent 的 runner 被带进了子 agent；或者把 edit/bash 工具误传给了 fork runner。
+
+**修复**：给子 agent 传 `WithoutRunner()` 的副本，fork 在嵌套层直接返回 `ERROR`；fork runner 仍然只暴露 `read_file`/`list_files`/`code_search`/`repo_map`/`skill`（无 runner）。
+
+**测试**：`TestWithoutRunnerDisablesFork`、`TestNestedRunnerIsReadOnly`。
+
+## 16. skill 正文泄漏进 system prompt
+
+**症状**：启动 trace 里 `model_start.messages[0]` 包含完整 `SKILL.md`，上下文被撑大。
+
+**根因**：把 `Definition.Content` 拼进了 prompt，而不是只拼 name/description。
+
+**修复**：`PromptSection` 只渲染索引；正文只通过 `skill` 工具返回。
+
+**测试**：`TestPromptSectionDoesNotLeakBody`。

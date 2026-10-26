@@ -14,6 +14,7 @@ internal/filestate     读后写
 internal/trace         JSONL
 internal/eval          fake provider 场景
 internal/model         openai/claude/ark/fake + usage + retry
+internal/skill         SKILL.md 加载 + 渐进式披露 + fork
 internal/session       JSON 快照
 internal/summary       /compact
 internal/ui            终端渲染
@@ -47,7 +48,7 @@ interrupt/resume: 无
 ```text
 runtime: adk.ChatModelAgent + adk.Runner
 state: ADK session/state
-middleware: 本分支实际使用 summarization；ADK 生态另有 agentsmd / filesystem / plantask / patchtoolcalls 等
+middleware: 本分支实际使用 summarization；ADK 生态另有 agentsmd / filesystem / skill / plantask / patchtoolcalls 等
 checkpoint: ADK CheckPointStore + Runner.Resume
 interrupt: ADK interrupt/resume
 ```
@@ -72,7 +73,9 @@ interrupt: ADK interrupt/resume
 | 压缩 | `MessageModifier` + contextmgr | summarization middleware |
 | checkpoint | 文件级 `.eino-agent/checkpoints` | `CheckPointStore` |
 | 中断恢复 | 无 | `Runner.Resume` |
-| 子 agent | 自定义只读 ReAct runner | 可复用同一 `subagent.Runner` 接口，或 ADK `NewAgentTool` |
+| 子 agent | 自定义只读 ReAct runner | `subagent.NewADKRunner`，同一个 `task` 工具 |
+| skill | 共享 `internal/skill` 工具 | 同样用共享工具；也可换成 ADK `adk/middlewares/skill` |
+| skill fork | 只读 ReAct 子 agent | 只读 ADK 子 agent |
 | 学习曲线 | 低 | 中高 |
 
 ## 5. 如何对比学习
@@ -85,6 +88,8 @@ interrupt: ADK interrupt/resume
 4. 加一个 middleware（例如动态注入 AGENTS.md）在两边的成本。
 
 注意：ADK 分支的 trace 字段可能多了 runner/session 相关事件；共享的 eval 断言应尽量只依赖 `tool_start`/`final`/文件结果，避免绑定运行时细节。
+
+Skill 层两个分支都用本项目的 `internal/skill`，所以行为一致、便于对照。ADK 自带的 `adk/middlewares/skill` 更完整：`AgentHub`、`fork_with_context`、按 skill 覆盖 model/agent，并支持自定义 backend。本项目没有直接采用它，是为了让 ReAct 分支也能复用同一套 `SKILL.md` 语义；想深入 ADK middleware 时，可以把 `internal/skill.Backend` 适配成 ADK 的 `skill.Backend` 再逐步替换。
 
 ## 6. 选择建议
 
