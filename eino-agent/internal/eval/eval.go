@@ -43,6 +43,12 @@ type Expect struct {
 	FilesContain     map[string]string `json:"files_contain,omitempty"`
 	ErrorContains    string            `json:"error_contains,omitempty"`
 	ExpectError      bool              `json:"expect_error,omitempty"`
+	TraceContains    []string          `json:"trace_contains,omitempty"`
+	TraceNotContains []string          `json:"trace_not_contains,omitempty"`
+	MinModelCalls    int               `json:"min_model_calls,omitempty"`
+	MaxModelCalls    int               `json:"max_model_calls,omitempty"`
+	MinToolCalls     int               `json:"min_tool_calls,omitempty"`
+	MaxToolCalls     int               `json:"max_tool_calls,omitempty"`
 }
 
 // Runner is the part of an agent runtime the harness needs.
@@ -62,6 +68,7 @@ type Result struct {
 	Final    string
 	Tools    []string
 	Trace    string
+	Stats    trace.Stats
 	Duration time.Duration
 }
 
@@ -139,6 +146,7 @@ func Run(ctx context.Context, sc Scenario, factory Factory) Result {
 	}
 	res.Trace = buf.String()
 	res.Tools = toolNamesFromTrace(res.Trace)
+	res.Stats, _ = trace.Summarize(strings.NewReader(res.Trace))
 
 	if sc.Expect.ExpectError {
 		if runErr == nil {
@@ -200,6 +208,28 @@ func Run(ctx context.Context, sc Scenario, factory Factory) Result {
 		if !strings.Contains(string(got), want) {
 			fail("file %q = %q, want substring %q", name, string(got), want)
 		}
+	}
+	for _, want := range sc.Expect.TraceContains {
+		if !strings.Contains(res.Trace, want) {
+			fail("trace does not contain %q", want)
+		}
+	}
+	for _, bad := range sc.Expect.TraceNotContains {
+		if strings.Contains(res.Trace, bad) {
+			fail("trace contains forbidden %q", bad)
+		}
+	}
+	if sc.Expect.MinModelCalls > 0 && res.Stats.ModelCalls < sc.Expect.MinModelCalls {
+		fail("model calls = %d, want >= %d", res.Stats.ModelCalls, sc.Expect.MinModelCalls)
+	}
+	if sc.Expect.MaxModelCalls > 0 && res.Stats.ModelCalls > sc.Expect.MaxModelCalls {
+		fail("model calls = %d, want <= %d", res.Stats.ModelCalls, sc.Expect.MaxModelCalls)
+	}
+	if sc.Expect.MinToolCalls > 0 && res.Stats.ToolCalls < sc.Expect.MinToolCalls {
+		fail("tool calls = %d, want >= %d", res.Stats.ToolCalls, sc.Expect.MinToolCalls)
+	}
+	if sc.Expect.MaxToolCalls > 0 && res.Stats.ToolCalls > sc.Expect.MaxToolCalls {
+		fail("tool calls = %d, want <= %d", res.Stats.ToolCalls, sc.Expect.MaxToolCalls)
 	}
 
 	res.Passed = len(res.Errors) == 0
@@ -294,7 +324,9 @@ func FormatResults(results []Result) string {
 		if !r.Passed {
 			status = "FAIL"
 		}
-		fmt.Fprintf(&b, "%s  %-24s %6dms  tools=%s\n", status, r.Name, r.Duration.Milliseconds(), strings.Join(r.Tools, ","))
+		fmt.Fprintf(&b, "%s  %-24s %6dms  tools=%s models=%d tokens=%d tool_errors=%d\n",
+			status, r.Name, r.Duration.Milliseconds(), strings.Join(r.Tools, ","),
+			r.Stats.ModelCalls, r.Stats.TotalTokens, r.Stats.ToolErrors)
 		for _, e := range r.Errors {
 			fmt.Fprintf(&b, "      %s\n", e)
 		}

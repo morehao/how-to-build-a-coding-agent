@@ -41,6 +41,17 @@ ReAct 入口在完整生命周期发出全部七类事件；ADK 入口目前从 
 - 字符串字段截断到 16 KiB，`tool_end.result` 同样受限；
 - 但 trace 仍可能包含源码、用户输入、文件内容。不要把 trace 上传到不可信位置；生产环境应再做结构化脱敏。
 
+## 3.1 聚合与 `/trace`
+
+`internal/trace.Summarize` 读取 JSONL，聚合 turn/model/tool 次数、prompt/completion/total token、模型/工具耗时和错误。REPL 内：
+
+```text
+/trace
+trace: events=12 turns=1 model=3 tool=2 tool_errors=0 tokens=1234 (prompt=1100 completion=134) model_ms=3400 tool_ms=120
+```
+
+没有 `--trace` 时命令会提示。这个聚合不依赖 provider，适合在失败后快速判断“是模型调用太多、工具报错，还是 token 爆了”；细粒度定位仍然看原始 JSONL。
+
 ## 4. Fake provider：确定性回放
 
 `--provider fake --script <json>` 用一个 JSON 脚本模拟模型：
@@ -87,7 +98,13 @@ ReAct 入口在完整生命周期发出全部七类事件；ADK 入口目前从 
     "files": {"hello.txt": "goodbye\n"},
     "files_contain": {"hello.txt": "goodbye"},
     "expect_error": false,
-    "error_contains": ""
+    "error_contains": "",
+    "trace_contains": ["tool_start"],
+    "trace_not_contains": ["bash"],
+    "min_model_calls": 2,
+    "max_model_calls": 5,
+    "min_tool_calls": 1,
+    "max_tool_calls": 3
   }
 }
 ```
@@ -98,7 +115,8 @@ ReAct 入口在完整生命周期发出全部七类事件；ADK 入口目前从 
 2. 用 fake provider 构造 runner；
 3. 跑一轮 `RunTurn`；
 4. 从 trace 中提取 `tool_start` 顺序；
-5. 检查 final、工具顺序/次数、禁止工具、文件内容、error。
+5. 聚合 trace 的 model/tool 次数、token、错误；
+6. 检查 final、工具顺序/次数、禁止工具、文件内容、error、trace 片段和调用上限。
 
 注意：它**只跑一轮**，不模拟多轮用户对话；也不验证真实 provider 的网络行为。这是有意的取舍：CI 要稳定、快、无密钥。
 
@@ -125,7 +143,8 @@ go test ./internal/agent -run 'TestEvalScenarios/read_then_edit' -v
 - fake provider 不会产生真实的模型推理、格式漂移和 provider 错误；
 - 场景只覆盖“一轮内的工具使用”，不覆盖审批交互、TTY、信号处理；
 - 文件断言是精确匹配，适合小 fixture，不适合大仓库；
-- trace 断言依赖事件名稳定；改动 trace schema 时要同步所有测试和文档。
+- trace 断言依赖事件名稳定；改动 trace schema 时要同步所有测试和文档；
+- `min/max_model_calls` 在 ADK 分支上不可用（ADK trace 没有 `model_end`），共享场景只应断言 tool/turn 事件。
 
 ## 9. 练习
 
