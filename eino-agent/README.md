@@ -137,17 +137,29 @@ ReAct 分支的**自动**压缩是确定性的，不额外调用模型，因此�
 
 | 模式 | `read_file` / `list_files` / `code_search` | `edit_file` | `bash` |
 | --- | --- | --- | --- |
-| `ask` | 允许 | 允许 | 每次询问 |
+| `ask` | 允许 | 每次询问 | 每次询问 |
 | `read-only` | 允许 | 拒绝 | 拒绝 |
-| `yolo` | 允许 | 允许 | 直接执行 |
+| `yolo` | 允许 | 直接执行 | 直接执行 |
 
-`ask` 模式在非 TTY（管道、CI）下会**默认拒绝** `bash`，不会卡住等待输入。交互式询问支持：
+`ask` 模式在非 TTY（管道、CI）下会**同时拒绝** `edit_file` 和 `bash`，不会卡住等待输入；用户需显式使用 `--permission-mode yolo`。
+
+`edit_file` 的审批会展示路径、变更摘要和 unified diff，选项：
+
+```text
+[y] 本次应用
+[a] 本进程内始终允许这个文件
+[N] 拒绝
+```
+
+`bash` 的审批选项：
 
 ```text
 [y] 本次允许
 [a] 本进程内始终允许这条完全相同的命令
 [N] 拒绝
 ```
+
+审批只覆盖 `bash` 和 `edit_file`；`read_file` / `list_files` / `code_search` 不弹窗，`update_plan` 只写 agent 自有的 `.eino-agent/plan.md`。
 
 工作区隔离和权限门禁不是操作系统级沙箱。真正执行不可信代码时，仍建议在容器或独立用户下运行。
 
@@ -171,7 +183,7 @@ cmd/eino-agent/main.go
         ├── internal/tools       6 个工具 + 错误软化 + 输出上限
         ├── internal/memory      .eino-agent/plan.md 工作记忆
         ├── internal/summary     结构化摘要（/compact）
-        ├── internal/approval    bash 人工审批
+        ├── internal/approval    bash / edit 人工审批
         ├── internal/agent       Eino ReAct + system prompt + callbacks
         ├── internal/contextmgr  确定性上下文压缩
         ├── internal/session     JSON 快照
@@ -213,6 +225,7 @@ go test ./...
 - `internal/contextmgr` 覆盖 token 估算、provider usage 校准、旧 tool 结果占位、旧 turn 丢弃、tool call 配对和超大消息截断；
 - `internal/summary` 覆盖结构化摘要 prompt 和空输出错误；`internal/memory` 覆盖 plan 读写与注入；
 - `internal/tools` 覆盖读、写、列目录、bash 审批/超时/截断、搜索 fallback；
+- `internal/approval` 覆盖 bash/edit 审批、always 记忆、read-only 和非 TTY 拒绝；
 - `internal/workspace` 覆盖路径逃逸和 symlink 逃逸；
 - `internal/session` 覆盖保存、恢复、裁剪；
 - `internal/config` 覆盖 flag/env 优先级和错误输入。

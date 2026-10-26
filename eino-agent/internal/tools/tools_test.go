@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -330,5 +331,92 @@ func TestUpdatePlan(t *testing.T) {
 	}
 	if _, err := o.updatePlan(context.Background(), updatePlanInput{Content: strings.Repeat("x", 40*1024)}); err == nil {
 		t.Fatal("oversized plan did not error")
+	}
+}
+
+func TestEditApprovalDeniedLeavesFileUnchanged(t *testing.T) {
+	o, dir := testOptions(t)
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o.Approver = &stubApprover{decision: approval.Deny}
+	if _, err := o.editFile(context.Background(), editFileInput{Path: "a.txt", OldStr: "before", NewStr: "after"}); err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("error = %v, want denied", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "before\n" {
+		t.Fatalf("file changed: %q", string(data))
+	}
+}
+
+func TestEditApprovalRequestCarriesDiff(t *testing.T) {
+	o, dir := testOptions(t)
+	if err := os.WriteFile(filepath.Join(dir, "a.txt"), []byte("old line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	approver := &stubApprover{decision: approval.Once}
+	o.Approver = approver
+	if _, err := o.editFile(context.Background(), editFileInput{Path: "a.txt", OldStr: "old line", NewStr: "new line"}); err != nil {
+		t.Fatal(err)
+	}
+	if approver.last.Kind != approval.KindEdit || approver.last.Path != "a.txt" {
+		t.Fatalf("approval request = %+v", approver.last)
+	}
+	if !strings.Contains(approver.last.Diff, "-old line") || !strings.Contains(approver.last.Diff, "+new line") {
+		t.Fatalf("diff = %q", approver.last.Diff)
+	}
+}
+
+func TestEditNonTTYAskDenied(t *testing.T) {
+	o, dir := testOptions(t)
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	o.Approver = approval.New(config.PermissionAsk, strings.NewReader(""), &bytes.Buffer{}, false)
+	if _, err := o.editFile(context.Background(), editFileInput{Path: "a.txt", OldStr: "before", NewStr: "after"}); err == nil || !strings.Contains(err.Error(), "denied") {
+		t.Fatalf("error = %v, want denied", err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "before\n" {
+		t.Fatalf("file changed: %q", string(data))
+	}
+}
+
+func TestUnifiedDiff(t *testing.T) {
+	old := "a\nb\nc\nd\ne\n"
+	got := unifiedDiff("x.txt", old, strings.Replace(old, "c", "C", 1), "c", "C")
+	for _, want := range []string{"--- a/x.txt", "+++ b/x.txt", "@@ -1,5 +1,5 @@", " a", "-c", "+C", " d"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("diff missing %q:\n%s", want, got)
+		}
+	}
+	created := unifiedDiff("new.txt", "", "one\ntwo\n", "", "one\ntwo\n")
+	if !strings.Contains(created, "--- /dev/null") || !strings.Contains(created, "@@ -0,0 +1,2 @@") || !strings.Contains(created, "+one") {
+		t.Fatalf("new-file diff:\n%s", created)
+	}
+}
+
+func TestEditTTYAskApprove(t *testing.T) {
+	o, dir := testOptions(t)
+	path := filepath.Join(dir, "a.txt")
+	if err := os.WriteFile(path, []byte("before\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	o.Approver = approval.New(config.PermissionAsk, strings.NewReader("y\n"), &out, true)
+	if _, err := o.editFile(context.Background(), editFileInput{Path: "a.txt", OldStr: "before", NewStr: "after"}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != "after\n" {
+		t.Fatalf("file = %q", string(data))
+	}
+	if !strings.Contains(out.String(), "[approval] edit_file") || !strings.Contains(out.String(), "-before") || !strings.Contains(out.String(), "+after") {
+		t.Fatalf("approval output:\n%s", out.String())
 	}
 }

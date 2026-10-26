@@ -59,3 +59,41 @@ func TestApprovalInteractive(t *testing.T) {
 		t.Fatalf("deny = %v, %v", d, err)
 	}
 }
+
+func TestApprovalEditShowsDiffAndRemembersPath(t *testing.T) {
+	var out bytes.Buffer
+	a := New(config.PermissionAsk, strings.NewReader("a\ny\n"), &out, true)
+	req := Request{
+		Kind: KindEdit, Tool: "edit_file", Path: "internal/foo.go",
+		Diff:    "--- a/internal/foo.go\n+++ b/internal/foo.go\n@@ -1,1 +1,1 @@\n-old\n+new\n",
+		Summary: "1 line(s) removed, 1 line(s) added",
+	}
+	d, err := a.Approve(context.Background(), req)
+	if err != nil || d != Always {
+		t.Fatalf("edit already = %v, %v", d, err)
+	}
+	if !strings.Contains(out.String(), "[approval] edit_file") || !strings.Contains(out.String(), "-old") || !strings.Contains(out.String(), "+new") {
+		t.Fatalf("edit prompt missing diff:\n%s", out.String())
+	}
+	// A second edit to the same path is allowed without another prompt.
+	out.Reset()
+	d, err = a.Approve(context.Background(), req)
+	if err != nil || d != Always {
+		t.Fatalf("remembered edit = %v, %v", d, err)
+	}
+	if strings.Contains(out.String(), "apply?") {
+		t.Fatalf("prompt repeated for remembered path:\n%s", out.String())
+	}
+}
+
+func TestApprovalEditNonTTYDenied(t *testing.T) {
+	var out bytes.Buffer
+	a := New(config.PermissionAsk, strings.NewReader(""), &out, false)
+	d, err := a.Approve(context.Background(), Request{Kind: KindEdit, Tool: "edit_file", Path: "a.go"})
+	if err != nil || d != Deny {
+		t.Fatalf("non-tty edit = %v, %v", d, err)
+	}
+	if !strings.Contains(out.String(), "non-interactive") {
+		t.Fatalf("missing non-interactive warning: %q", out.String())
+	}
+}
