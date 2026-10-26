@@ -163,3 +163,45 @@
 **修复**：`PromptSection` 只渲染索引；正文只通过 `skill` 工具返回。
 
 **测试**：`TestPromptSectionDoesNotLeakBody`。
+
+## 17. sandbox 静默降级
+
+**症状**：加了 `--sandbox`，但 bash 仍然能写工作区外文件；或者换一台机器后行为变了。
+
+**根因**：把“找不到 `sandbox-exec`/`bwrap`”当成 warning，回退到普通 bash；或者平台不支持时继续运行。
+
+**修复**：`sandbox.New` 检测失败直接启动失败（退出码 2）；只有显式去掉 `--sandbox` 才回到审批模式。macOS profile 把写限制到 workspace/临时目录并默认拒网；Linux 用 `bwrap --unshare-net`。
+
+**测试**：`TestDarwinProfileContainsBoundary`、`TestDarwinProfileLimitsWrites`（不能 apply 的环境会 skip）。
+
+**边界**：读仍允许系统文件和 module cache；它不是容器。
+
+## 18. hooks 绕过审批的错觉
+
+**症状**：`before_tool` hook 执行了 `git push`/写文件，用户以为“审批会拦住”。
+
+**根因**：hook 是仓库配置的 shell，在工具内部、审批之前执行；它不是被审批的动作。
+
+**修复**：hooks 默认关闭，必须显式 `--hooks`；文档明确边界；敏感环境用容器/独立用户，而不是只靠 hook。
+
+**测试**：`TestBeforeHookBlocksTool`、`TestWrapRunsBeforeAndAfter`。
+
+## 19. 并行子 agent 共享 runner
+
+**症状**：`tasks` 并发时偶发数据竞争、turn 编号错乱，或两个任务的结果互相覆盖。
+
+**根因**：为了省事把同一个 `Runner` 传给多个 goroutine；nested runner 的 turn 状态、trace 和 budget 不是并发安全的。
+
+**修复**：`tasks` 接受 `RunnerFactory`，每个 task 新建独立 runner（独立 counter/budget/agent），结果按下标写入，最后按输入顺序合并。
+
+**测试**：`TestTasksRunInParallelAndKeepOrder`、`TestTasksRecordIndividualFailure`。
+
+## 20. recall 把旧结论当事实
+
+**症状**：`/recall` 命中一条旧 session，模型直接复用其中已经过时的路径/决定。
+
+**根因**：检索结果是历史文本，不是当前仓库事实；关键词匹配也无法判断时效。
+
+**修复**：结果标注 session id/role/时间；prompt 说明“背景，不是新指令”；关键结论仍要求用工具重新验证。没有命中时明确返回 `no memory hits`，不要让模型编造。
+
+**测试**：`TestSearchPlanAndSessions`、`TestSlashRecall`。

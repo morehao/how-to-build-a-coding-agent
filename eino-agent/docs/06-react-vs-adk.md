@@ -72,10 +72,13 @@ interrupt: ADK interrupt/resume（库能力；CLI /resume 恢复的是 session�
 | 历史 | `RunTurn(history)` 显式传入 | Runner session/state |
 | 压缩 | `MessageModifier` + contextmgr | summarization middleware |
 | checkpoint | 文件级 `.eino-agent/checkpoints` | `FileStore` + `RunnerConfig.CheckPointStore` |
-| 中断恢复 | turn 级取消，不重放图状态 | `Runner.Resume` / `ResumeWithParams`（库能力） |
+| 中断恢复 | turn 级取消；`/resume` 恢复 session 快照 | `Runner.Resume`/`ResumeWithParams`（库能力）；CLI `/resume` 恢复 session |
+| 权限/hooks | 共享 `internal/approval` + `internal/hooks` | 同一套共享实现 |
+| sandbox | `--sandbox` 包住 bash | 同一套共享实现 |
 | 子 agent | 自定义只读 ReAct runner | `subagent.NewADKRunner`，同一套 `task`/`tasks` 工具 |
 | skill | 共享 `internal/skill` 工具 | 同样用共享工具；也可换成 ADK `adk/middlewares/skill` |
 | skill fork | 只读 ReAct 子 agent | 只读 ADK 子 agent |
+| 记忆检索 | `recall` / `/recall` 关键词检索 | 同一套共享实现 |
 | 学习曲线 | 低 | 中高 |
 
 ## 5. 如何对比学习

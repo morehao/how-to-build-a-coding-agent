@@ -183,22 +183,6 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		toolList = append(toolList, mcpTools...)
 		u.Verbosef("MCP: %d tool(s) from %d server(s)", len(mcpTools), len(mcpCfg.Servers))
 	}
-	if cfg.HooksPath != "" {
-		hooksPath := cfg.HooksPath
-		if !filepath.IsAbs(hooksPath) {
-			hooksPath = filepath.Join(ws.Root(), hooksPath)
-		}
-		hookSet, hookErr := hooks.Load(ws, hooksPath)
-		if hookErr != nil {
-			u.Error("hooks: %v", hookErr)
-			return 1
-		}
-		if hookSet != nil {
-			toolList = hookSet.Wrap(ctx, toolList)
-			u.Verbosef("hooks: %d before, %d after", len(hookSet.Before), len(hookSet.After))
-		}
-	}
-
 	var rec *trace.Recorder
 	if cfg.Trace != "" {
 		rec, err = trace.Open(cfg.Trace)
@@ -253,6 +237,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	}
 	if st, ok := skillTool.(*skill.Tool); ok && subRunner != nil {
 		st.SetRunner(subRunner)
+	}
+
+	if cfg.HooksPath != "" {
+		hooksPath := cfg.HooksPath
+		if !filepath.IsAbs(hooksPath) {
+			hooksPath = filepath.Join(ws.Root(), hooksPath)
+		}
+		hookSet, hookErr := hooks.Load(ws, hooksPath)
+		if hookErr != nil {
+			u.Error("hooks: %v", hookErr)
+			return 1
+		}
+		if hookSet != nil {
+			toolList = hookSet.Wrap(ctx, toolList)
+			u.Verbosef("hooks: %d before, %d after", len(hookSet.Before), len(hookSet.After))
+		}
 	}
 
 	systemPrompt, err := agentbase.BuildSystemPrompt(ws, cfg.PermissionMode)

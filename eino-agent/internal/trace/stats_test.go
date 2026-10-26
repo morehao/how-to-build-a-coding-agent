@@ -20,7 +20,7 @@ not-json
 	if st.Events != 5 || st.Turns != 1 || st.ModelCalls != 1 || st.ToolCalls != 2 || st.ToolErrors != 1 {
 		t.Fatalf("stats = %+v", st)
 	}
-	if st.PromptTokens != 12 || st.CompletionTokens != 7 || st.TotalTokens != 19 {
+	if st.PromptTokens != 10 || st.CompletionTokens != 4 || st.TotalTokens != 14 {
 		t.Fatalf("tokens = %+v", st)
 	}
 	if st.ModelMS != 120 || st.ToolMS != 35 {

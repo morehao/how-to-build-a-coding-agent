@@ -124,7 +124,7 @@ ADK 分支在上面共享能力之外还有：
 如果继续迭代，建议顺序：
 
 1. 真实 provider 的集成 smoke test（可选 nightly）；
-2. 子 agent 的并行 fan-out、独立 token 预算与结构化报告；
+2. trace 的 HTML viewer、按 turn/tool 的瀑布图和 `jq` 配方；
 3. skill 的热加载、skill 级工具白名单、ADK `AgentHub`/`fork_with_context`；
 4. 更完整的 `.einoignore`/gitignore 语义；
-5. trace 的 HTML viewer 或 `jq` 配方。
+5. 把 `recall` 从关键词匹配升级为可选 embedding 索引（保持无密钥默认路径）。

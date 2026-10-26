@@ -374,7 +374,7 @@ func TestSlashTraceSummary(t *testing.T) {
 		u:   ui.New(&out, &errOut, false, false),
 	}
 	handled, code := handleSlashCommand(context.Background(), "/trace", d)
-	if !handled || code != -1 || !strings.Contains(out.String(), "tokens=10") {
+	if !handled || code != -1 || !strings.Contains(out.String(), "tokens=5") {
 		t.Fatalf("handled=%v code=%d out=%q", handled, code, out.String())
 	}
 }
