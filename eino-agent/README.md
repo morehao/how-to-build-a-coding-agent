@@ -52,7 +52,7 @@ export ARK_API_KEY=...
 REPL 命令：
 
 ```text
-/help /clear /compact /plan /session /sessions /resume <id> /stats /undo /checkpoints /exit
+/help /clear /compact /plan /recall <query> /session /sessions /resume <id> /stats /trace /undo /checkpoints /exit
 ```
 
 ## 参数
@@ -247,11 +247,12 @@ cmd/eino-agent/main.go
         ├── internal/retry       指数退避
         ├── internal/skill       SKILL.md 加载 + 渐进式披露
         ├── internal/hooks       opt-in tool before/after hooks
-        ├── internal/subagent    只读嵌套 runner + task
+        ├── internal/subagent    只读嵌套 runner + task/tasks
+        ├── internal/sandbox     opt-in sandbox-exec/bwrap
         ├── internal/mcp         stdio MCP 工具
         ├── internal/agent       Eino ReAct + prompt + callbacks
         ├── internal/contextmgr  确定性压缩
-        ├── internal/memory      plan 工作记忆
+        ├── internal/memory      plan 工作记忆 + session recall
         ├── internal/summary     /compact
         ├── internal/session     JSON 快照
         └── internal/ui          终端渲染
