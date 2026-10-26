@@ -47,7 +47,7 @@ interrupt/resume: 无
 ```text
 runtime: adk.ChatModelAgent + adk.Runner
 state: ADK session/state
-middleware: summarization / agentsmd / filesystem / plantask / patchtoolcalls ...
+middleware: 本分支实际使用 summarization；ADK 生态另有 agentsmd / filesystem / plantask / patchtoolcalls 等
 checkpoint: ADK CheckPointStore + Runner.Resume
 interrupt: ADK interrupt/resume
 ```
