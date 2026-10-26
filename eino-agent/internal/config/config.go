@@ -60,6 +60,8 @@ type Config struct {
 	PermissionRules   string
 	NoPermissionRules bool
 	HooksPath         string
+	SubagentMaxTokens int
+	SubagentMaxTasks  int
 	AllowSensitive    bool
 	AllowEnv          bool
 	MaxRetries        int
@@ -85,36 +87,38 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.SetOutput(io.Discard)
 
 	var (
-		provider         string
-		modelName        string
-		baseURL          string
-		workspace        string
-		maxSteps         int
-		historyBytes     int
-		contextTokens    int
-		permissionMode   string
-		sessionDir       string
-		resume           string
-		noStream         bool
-		verbose          bool
-		prompt           string
-		showVersion      bool
-		script           string
-		tracePath        string
-		noCheckpoints    bool
-		noReadBeforeEdit bool
-		permissionRules  string
-		noRules          bool
-		hooksPath        string
-		allowSensitive   bool
-		allowEnv         bool
-		maxRetries       int
-		retryBaseMS      int
-		maxTotalTokens   int
-		maxTokens        int
-		mcpConfig        string
-		skillsDir        string
-		noSkills         bool
+		provider          string
+		modelName         string
+		baseURL           string
+		workspace         string
+		maxSteps          int
+		historyBytes      int
+		contextTokens     int
+		permissionMode    string
+		sessionDir        string
+		resume            string
+		noStream          bool
+		verbose           bool
+		prompt            string
+		showVersion       bool
+		script            string
+		tracePath         string
+		noCheckpoints     bool
+		noReadBeforeEdit  bool
+		permissionRules   string
+		noRules           bool
+		hooksPath         string
+		subagentMaxTokens int
+		subagentMaxTasks  int
+		allowSensitive    bool
+		allowEnv          bool
+		maxRetries        int
+		retryBaseMS       int
+		maxTotalTokens    int
+		maxTokens         int
+		mcpConfig         string
+		skillsDir         string
+		noSkills          bool
 	)
 
 	fs.StringVar(&provider, "provider", "", "model provider: auto|openai|claude|ark")
@@ -139,6 +143,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&permissionRules, "permission-rules", "", "JSON allow/deny rules (default: .eino-agent/permissions.json)")
 	fs.BoolVar(&noRules, "no-permission-rules", false, "do not load permission rules")
 	fs.StringVar(&hooksPath, "hooks", "", "opt-in JSON tool hooks file")
+	fs.IntVar(&subagentMaxTokens, "subagent-max-tokens", 0, "token budget per subagent task (default: 16000)")
+	fs.IntVar(&subagentMaxTasks, "subagent-max-tasks", 0, "maximum tasks per parallel call (default: 4)")
 	fs.BoolVar(&allowSensitive, "allow-sensitive", false, "allow reading .env, keys and credentials files")
 	fs.BoolVar(&allowEnv, "allow-env", false, "pass the full environment (including API keys) to bash")
 	fs.IntVar(&maxRetries, "max-retries", 0, "retry model calls on 429/5xx/timeouts (default: 2)")
@@ -284,6 +290,14 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	cfg.PermissionRules = firstNonEmpty(permissionRules, getenv("EINO_AGENT_PERMISSION_RULES"), ".eino-agent/permissions.json")
 	cfg.NoPermissionRules = boolValue(visited["no-permission-rules"], noRules, getenv("EINO_AGENT_NO_PERMISSION_RULES"))
 	cfg.HooksPath = firstNonEmpty(hooksPath, getenv("EINO_AGENT_HOOKS"))
+	cfg.SubagentMaxTokens, err = intValue(visited["subagent-max-tokens"], subagentMaxTokens, getenv("EINO_AGENT_SUBAGENT_MAX_TOKENS"), 16000)
+	if err != nil {
+		return nil, err
+	}
+	cfg.SubagentMaxTasks, err = intValue(visited["subagent-max-tasks"], subagentMaxTasks, getenv("EINO_AGENT_SUBAGENT_MAX_TASKS"), 4)
+	if err != nil {
+		return nil, err
+	}
 
 	cfg.Trace = firstNonEmpty(tracePath, getenv("EINO_AGENT_TRACE"))
 	if cfg.Trace != "" {
@@ -309,6 +323,12 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	cfg.MaxTokens, err = intValue(visited["max-tokens"], maxTokens, getenv("EINO_AGENT_MAX_TOKENS"), 8192)
 	if err != nil || cfg.MaxTokens < 1 {
 		return nil, fmt.Errorf("max-tokens must be >= 1")
+	}
+	if cfg.SubagentMaxTokens < 0 {
+		return nil, fmt.Errorf("subagent-max-tokens must be >= 0")
+	}
+	if cfg.SubagentMaxTasks < 1 || cfg.SubagentMaxTasks > 8 {
+		return nil, fmt.Errorf("subagent-max-tasks must be between 1 and 8")
 	}
 	cfg.SkillsDir = firstNonEmpty(skillsDir, getenv("EINO_AGENT_SKILLS_DIR"), "skills")
 	cfg.NoSkills = boolValue(visited["no-skills"], noSkills, getenv("EINO_AGENT_NO_SKILLS"))
@@ -360,6 +380,11 @@ Safety and reliability:
   --retry-base-ms int       base backoff delay in ms (default: 500)
   --no-checkpoints          disable file snapshots used by /undo
   --no-read-before-edit     allow edits without reading the current file first
+  --permission-rules string JSON allow/deny rules (default: .eino-agent/permissions.json)
+  --no-permission-rules     do not load permission rules
+  --hooks string            opt-in JSON tool hooks file
+  --subagent-max-tokens int token budget per subagent task (default: 16000)
+  --subagent-max-tasks int  maximum tasks per parallel call (default: 4)
   --allow-sensitive         allow reading .env, keys and credential files
   --allow-env               pass the full environment to bash (default: scrub secrets)
 
@@ -381,7 +406,8 @@ Environment:
   EINO_AGENT_MAX_TOKENS, EINO_AGENT_NO_CHECKPOINTS, EINO_AGENT_NO_READ_BEFORE_EDIT,
   EINO_AGENT_ALLOW_SENSITIVE, EINO_AGENT_ALLOW_ENV,
   EINO_AGENT_PERMISSION_RULES, EINO_AGENT_NO_PERMISSION_RULES,
-  EINO_AGENT_HOOKS
+  EINO_AGENT_HOOKS,
+  EINO_AGENT_SUBAGENT_MAX_TOKENS, EINO_AGENT_SUBAGENT_MAX_TASKS
 
 Provider credentials:
   openai:  OPENAI_API_KEY,  optional OPENAI_BASE_URL,  OPENAI_MODEL

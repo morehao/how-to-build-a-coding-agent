@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -18,8 +19,10 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/agent"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/budget"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	modelpkg "github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/model"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/tools"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/trace"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
@@ -53,6 +56,9 @@ type Config struct {
 	SkillPrompt    string
 	Timeout        time.Duration
 	MaxResultBytes int
+	// MaxTotalTokens caps this nested runner's own token usage. It is
+	// independent of the parent's budget; 0 inherits no extra cap.
+	MaxTotalTokens int
 }
 
 // NewReActRunner creates a read-only nested agent with read/list/search/repo_map
@@ -78,6 +84,10 @@ func NewReActRunner(ctx context.Context, cfg Config) (*ReActRunner, error) {
 	}
 	if cfg.MaxResultBytes <= 0 {
 		cfg.MaxResultBytes = 64 * 1024
+	}
+	nestedModel := cfg.Model
+	if cfg.MaxTotalTokens > 0 {
+		nestedModel = modelpkg.NewUsageModel(nestedModel, contextmgr.NewCounter(), budget.New(cfg.MaxTotalTokens))
 	}
 	all, err := tools.New(ctx, tools.Options{
 		Workspace:      cfg.Workspace,
@@ -122,7 +132,7 @@ func NewReActRunner(ctx context.Context, cfg Config) (*ReActRunner, error) {
 		"You cannot edit files, run bash, or delegate further. Available tools: " + strings.Join(names, ", ") + "."
 	silent := ui.New(io.Discard, io.Discard, false, false)
 	nested, err := agent.New(ctx, agent.Config{
-		Model:         cfg.Model,
+		Model:         nestedModel,
 		Tools:         nestedTools,
 		SystemPrompt:  prompt,
 		MaxSteps:      cfg.MaxSteps,
@@ -196,6 +206,95 @@ func NewTaskTool(r Runner) (tool.BaseTool, error) {
 			}
 			out = truncateUTF8(out, 64*1024)
 			return fmt.Sprintf("subagent (%s):\n%s", strings.TrimSpace(in.Description), out), nil
+		},
+	)
+}
+
+type tasksInput struct {
+	Tasks []taskInput `json:"tasks" jsonschema:"required" jsonschema_description:"Independent read-only investigations to run in parallel (max 4)."`
+}
+
+// RunnerFactory creates an isolated runner for one parallel task. Each runner
+// must own its turn state and token budget; sharing one Runner across
+// goroutines is not safe.
+type RunnerFactory func() (Runner, error)
+
+// NewTasksTool is the parallel variant of task. Results are returned in input
+// order even though the runners execute concurrently.
+func NewTasksTool(factory RunnerFactory, maxTasks int) (tool.BaseTool, error) {
+	if factory == nil {
+		return nil, errors.New("subagent: runner factory is required")
+	}
+	if maxTasks <= 0 {
+		maxTasks = 4
+	}
+	if maxTasks > 8 {
+		maxTasks = 8
+	}
+	return utils.InferTool(
+		"tasks",
+		"Run multiple independent read-only investigations in parallel. Each task gets its own read-only subagent and token budget. Use this instead of repeated task calls when the questions do not depend on each other. Results are returned in input order.",
+		func(ctx context.Context, in tasksInput) (string, error) {
+			if len(in.Tasks) == 0 {
+				return "", errors.New("tasks is empty")
+			}
+			if len(in.Tasks) > maxTasks {
+				return "", fmt.Errorf("too many tasks: %d (max %d)", len(in.Tasks), maxTasks)
+			}
+			type result struct {
+				text string
+				err  error
+			}
+			results := make([]result, len(in.Tasks))
+			sem := make(chan struct{}, maxTasks)
+			var wg sync.WaitGroup
+			for i := range in.Tasks {
+				i := i
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					select {
+					case sem <- struct{}{}:
+						defer func() { <-sem }()
+					case <-ctx.Done():
+						results[i].err = ctx.Err()
+						return
+					}
+					r, err := factory()
+					if err != nil {
+						results[i].err = err
+						return
+					}
+					out, err := r.Run(ctx, in.Tasks[i].Prompt)
+					if err != nil {
+						results[i].err = err
+						return
+					}
+					results[i].text = truncateUTF8(out, 64*1024)
+				}()
+			}
+			wg.Wait()
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
+			var b strings.Builder
+			fmt.Fprintf(&b, "parallel subagents (%d):", len(in.Tasks))
+			for i, r := range results {
+				desc := strings.TrimSpace(in.Tasks[i].Description)
+				if desc == "" {
+					desc = fmt.Sprintf("task %d", i+1)
+				}
+				b.WriteString("\n\n## ")
+				b.WriteString(desc)
+				b.WriteString("\n")
+				if r.err != nil {
+					b.WriteString("ERROR: subagent task failed: ")
+					b.WriteString(r.err.Error())
+				} else {
+					b.WriteString(r.text)
+				}
+			}
+			return truncateUTF8(b.String(), 256*1024), nil
 		},
 	)
 }

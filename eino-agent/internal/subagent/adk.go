@@ -13,8 +13,10 @@ import (
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/agent"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/agentadk"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/budget"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	modelpkg "github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/model"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/tools"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 )
@@ -49,6 +51,10 @@ func NewADKRunner(ctx context.Context, cfg Config) (*ADKRunner, error) {
 	}
 	if cfg.MaxResultBytes <= 0 {
 		cfg.MaxResultBytes = 64 * 1024
+	}
+	nestedModel := cfg.Model
+	if cfg.MaxTotalTokens > 0 {
+		nestedModel = modelpkg.NewUsageModel(nestedModel, contextmgr.NewCounter(), budget.New(cfg.MaxTotalTokens))
 	}
 	all, err := tools.New(ctx, tools.Options{
 		Workspace:      cfg.Workspace,
@@ -93,7 +99,7 @@ func NewADKRunner(ctx context.Context, cfg Config) (*ADKRunner, error) {
 		"You cannot edit files, run bash, or delegate further. Available tools: " + strings.Join(names, ", ") + "."
 	silent := ui.New(io.Discard, io.Discard, false, false)
 	nested, err := agentadk.New(ctx, agentadk.Config{
-		Model:         cfg.Model,
+		Model:         nestedModel,
 		Tools:         nestedTools,
 		SystemPrompt:  prompt,
 		MaxSteps:      cfg.MaxSteps,

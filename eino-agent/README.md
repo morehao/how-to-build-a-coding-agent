@@ -96,6 +96,8 @@ REPL 命令：
 | `--permission-rules` | allow/deny 规则 JSON | `.eino-agent/permissions.json` |
 | `--no-permission-rules` | 不加载权限规则 | 加载 |
 | `--hooks` | 启用 tool hooks 的 JSON 文件 | 关闭 |
+| `--subagent-max-tokens` | 每个子 agent 的 token 预算，0 不额外限制 | `16000` |
+| `--subagent-max-tasks` | 一次 `tasks` 调用的最大并发数 | `4` |
 
 退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` SIGINT。
 
@@ -105,7 +107,7 @@ REPL 中 Ctrl-C 取消当前 turn 并回到提示符，不写入未完成的历�
 
 ## 工具
 
-模型看到八个内置工具；`task` 和 `skill` 由 CLI 按需注入，最多十个：
+模型看到八个内置工具；`task`、`tasks` 和 `skill` 由 CLI 按需注入，最多十一个：
 
 | 工具 | 行为 | 关键限制 |
 | --- | --- | --- |
@@ -117,7 +119,8 @@ REPL 中 Ctrl-C 取消当前 turn 并回到提示符，不写入未完成的历�
 | `bash` | 工作区根目录 `bash -c` | 默认 120s、最大 600s；输出头尾各约 128 KiB；超时杀进程组 |
 | `code_search` | 正则搜索，优先 `rg`，否则 Go walker | 默认 100 条、最大 500 条；单文件 `rg` 最多 100 |
 | `update_plan` | 整体替换 `.eino-agent/plan.md` | 最大 32 KiB |
-| `task` | 委派只读子 agent（可选） | 子 agent 无 edit/bash，不能再委派；默认 2 分钟、64 KiB 报告上限 |
+| `task` | 委派一个只读子 agent（可选） | 子 agent 无 edit/bash，不能再委派；默认 2 分钟、64 KiB 报告上限 |
+| `tasks` | 并行委派多个只读子 agent（可选） | 每个 task 独立 runner + token 预算；最多 `--subagent-max-tasks` 个，结果按输入顺序返回 |
 | `skill` | 按名加载 `SKILL.md` 正文（可选） | 只读；渐进式披露；`fork` 走只读子 agent |
 
 工具的业务错误以 `ERROR: ...` 作为工具输出返回模型，不会直接中断图；UI 会把 `ERROR:` 和非零 `exit code` 显示为失败。所有工具输出有 256 KiB 硬上限。

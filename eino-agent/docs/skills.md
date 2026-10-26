@@ -94,7 +94,7 @@ Base directory: /repo/skills/review
 context: fork
 ```
 
-父 agent 调用该 skill 时，会通过只读子 agent 执行 skill 指令，只把结果摘要返回主上下文。子 agent 仍然不能 edit、bash 或继续委派 `task`，并且有超时和输出上限。
+父 agent 调用该 skill 时，会通过只读子 agent 执行 skill 指令，只把结果摘要返回主上下文。子 agent 仍然不能 edit、bash 或继续委派 `task`/`tasks`，并且有超时和输出上限。
 
 `fork_with_context` 当前不支持：轻量 `skill` 工具的 runner 接口只接收一段 prompt，没有父消息历史。需要完整 fork 语义时，应在 ADK 分支使用 Eino ADK 的 `adk/middlewares/skill`，它支持 `fork_with_context`、`AgentHub` 和按 skill 覆盖 model；本项目选择共享一套更小的实现，便于 ReAct/ADK 对比。
 

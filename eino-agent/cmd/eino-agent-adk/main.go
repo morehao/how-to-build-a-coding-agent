@@ -212,20 +212,32 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	})
 	chatModel = model.NewUsageModel(chatModel, counter, tracker)
 
-	subRunner, err := subagent.NewADKRunner(ctx, subagent.Config{
-		Workspace:   ws,
-		Model:       chatModel,
-		Trace:       rec,
-		MaxSteps:    6,
-		SkillTool:   nestedSkillTool,
-		SkillPrompt: skillPrompt,
+	subCfg := subagent.Config{
+		Workspace:      ws,
+		Model:          chatModel,
+		Trace:          rec,
+		MaxSteps:       6,
+		SkillTool:      nestedSkillTool,
+		SkillPrompt:    skillPrompt,
+		MaxTotalTokens: cfg.SubagentMaxTokens,
+	}
+	newSub := subagent.RunnerFactory(func() (subagent.Runner, error) {
+		return subagent.NewADKRunner(ctx, subCfg)
 	})
+	subRunner, err := newSub()
 	if err != nil {
 		u.Warn("warning: task tool disabled: %v", err)
-	} else if taskTool, taskErr := subagent.NewTaskTool(subRunner); taskErr != nil {
-		u.Warn("warning: task tool disabled: %v", taskErr)
 	} else {
-		toolList = append(toolList, taskTool)
+		if taskTool, taskErr := subagent.NewTaskTool(subRunner); taskErr != nil {
+			u.Warn("warning: task tool disabled: %v", taskErr)
+		} else {
+			toolList = append(toolList, taskTool)
+		}
+		if tasksTool, tasksErr := subagent.NewTasksTool(newSub, cfg.SubagentMaxTasks); tasksErr != nil {
+			u.Warn("warning: tasks tool disabled: %v", tasksErr)
+		} else {
+			toolList = append(toolList, tasksTool)
+		}
 	}
 	if st, ok := skillTool.(*skill.Tool); ok && subRunner != nil {
 		st.SetRunner(subRunner)
