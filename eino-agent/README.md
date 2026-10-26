@@ -1,24 +1,25 @@
 # Eino Code Agent
 
-一个运行在本地终端里的简易 coding agent，基于字节跳动 [CloudWeGo Eino](https://github.com/cloudwego/eino) 的 ReAct 图实现。它可以读代码、列目录、搜索、改文件、跑命令，并把会话保存到本地。
+一个运行在本地终端里的教学向 coding agent，基于 [CloudWeGo Eino](https://github.com/cloudwego/eino)。它从 ReAct 最小闭环出发，逐步补齐 agent 工程里真正难的部分：工作区边界、审批、读后写、可回滚的文件修改、上下文预算、trace 和确定性 eval。
 
-这个目录是仓库根目录 workshop 代码之外的**独立 Go module**，不与根目录那些单文件示例共享 `package main`。根目录示例仍然按原样保留。
+这个目录是仓库根目录 workshop 示例之外的**独立 Go module**。
 
 ## 两个分支
 
-| 分支 | 实现 | 特点 |
+| 分支 | 运行时 | 重点 |
 | --- | --- | --- |
-| `feat/eino-code-agent` | Eino `flow/agent/react` | 轻量、直接、依赖少，当前分支 |
-| `feat/eino-code-agent-adk` | Eino `adk.ChatModelAgent` + `adk.Runner` | 在 ReAct 版基础上增加 ADK 运行时，保留 ReAct 命令用于对比 |
+| `feat/eino-code-agent` | Eino `flow/agent/react` | 最小、直接，适合先把控制流读透 |
+| `feat/eino-code-agent-adk` | Eino ADK `ChatModelAgent` + `Runner` | 对比 middleware、checkpoint、interrupt/resume |
 
-ADK 分支从当前分支创建，因此公共的 config / workspace / tools / session / UI 完全复用，差异集中在 agent 运行时与入口命令。
+共享层（config/workspace/tools/approval/trace/eval/fake provider）尽量保持同一套契约；差异见 [`docs/06-react-vs-adk.md`](docs/06-react-vs-adk.md)。
 
 ## 快速开始
 
-要求 Go 1.24.2+。`ripgrep` 可选；没有 `rg` 时 `code_search` 会退回 Go 自带的目录遍历。
+要求 Go 1.24.2+。`ripgrep` 可选；没有 `rg` 时 `code_search` 回退到 Go 遍历。
 
 ```bash
 cd eino-agent
+go test ./...                                  # 不需要 API key
 go build -o eino-agent ./cmd/eino-agent
 
 # OpenAI 或任意 OpenAI 兼容端点
@@ -29,15 +30,9 @@ export OPENAI_API_KEY=sk-...
 export ANTHROPIC_API_KEY=sk-ant-...
 ./eino-agent --provider claude --model <claude-model> --workspace /path/to/repo
 
-# 火山方舟（Ark 的 OpenAI 兼容端点，model 填 endpoint id）
+# 火山方舟（model 填 endpoint id）
 export ARK_API_KEY=...
 ./eino-agent --provider ark --model <endpoint-id> --workspace /path/to/repo
-```
-
-也可以直接运行：
-
-```bash
-go run ./cmd/eino-agent --provider openai --model gpt-4o-mini --workspace .
 ```
 
 单次执行：
@@ -46,131 +41,153 @@ go run ./cmd/eino-agent --provider openai --model gpt-4o-mini --workspace .
 ./eino-agent -p "读一下 go.mod，用三句话总结依赖" --workspace .
 ```
 
-交互模式常用命令：
+不联网的可复现运行：
+
+```bash
+./eino-agent --provider fake \
+  --script testdata/scenarios/read_edit.json \
+  --workspace /tmp/eino-demo --no-stream --trace /tmp/eino-demo/trace.jsonl
+```
+
+REPL 命令：
 
 ```text
-/help      查看命令
-/clear     清空当前会话历史和摘要
-/compact   把历史压缩成结构化摘要
-/plan      查看持久化工作记忆
-/session   显示 session id 和快照路径
-/exit      退出
+/help /clear /compact /plan /session /stats /undo /checkpoints /exit
 ```
 
 ## 参数
 
 | 参数 | 说明 | 默认 |
 | --- | --- | --- |
-| `--provider` | `auto` / `openai` / `claude` / `ark` | `auto` |
-| `--model` | 模型名；Ark 填 endpoint id | 必填，或读 provider 对应环境变量 |
+| `--provider` | `auto` / `openai` / `claude` / `ark` / `fake` | `auto` |
+| `--model` | 模型名；Ark 填 endpoint id | 必填，或读 provider 环境变量 |
 | `--base-url` | OpenAI 兼容或 Anthropic 代理地址 | provider 默认 |
 | `--workspace` | 工作区根目录 | 当前目录 |
-| `--max-steps` | ReAct 图最大步数 | `30` |
-| `--history-bytes` | 持久化历史预算（字节，近似值） | `262144` |
-| `--context-tokens` | 单次模型调用的近似 token 预算；超出时压缩输入 | `32000` |
+| `--max-steps` | ReAct 图最大步数（不是模型调用次数） | `30` |
+| `--history-bytes` | session 持久化历史预算 | `262144` |
+| `--context-tokens` | 单次模型调用近似预算 | `32000` |
 | `--permission-mode` | `ask` / `read-only` / `yolo` | `ask` |
-| `--session-dir` | 会话快照目录 | 用户配置目录下 `eino-agent/sessions` |
-| `--resume` | 按 session id 或 JSON 路径恢复 | 无 |
-| `--no-stream` | 关闭流式输出，改用 `Generate` | 流式 |
-| `--verbose` | 在 stderr 打印诊断信息 | 关闭 |
-| `-p, --prompt` | 单次 prompt，执行后退出 | 无 |
-| `--version` | 打印版本 | — |
+| `--session-dir` | session 快照目录 | 用户配置目录下 `eino-agent/sessions` |
+| `--resume` | 按 id 或 JSON 路径恢复 | 无 |
+| `--no-stream` | 关闭流式输出 | 流式 |
+| `--verbose` | stderr 诊断 | 关闭 |
+| `-p, --prompt` | 单次 prompt | 无 |
+| `--version` | 版本 | — |
+| `--max-tokens` | Claude 最大 completion tokens | `8192` |
+| `--max-total-tokens` | session token 上限，0 不限 | `0` |
+| `--max-retries` | 429/5xx/timeout 重试次数 | `2` |
+| `--retry-base-ms` | 退避基数 | `500` |
+| `--no-checkpoints` | 关闭 `/undo` 快照 | 开启 |
+| `--no-read-before-edit` | 关闭读后写检查 | 开启 |
+| `--allow-sensitive` | 允许读写 `.env`/密钥/凭据 | 拒绝 |
+| `--allow-env` | bash 传入完整环境变量 | 过滤 secret |
+| `--trace` | JSONL trace 路径 | 无 |
+| `--script` | fake provider 脚本 | 无 |
+| `--mcp-config` | MCP server JSON 配置 | 无 |
 
-退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` 被 SIGINT 中断。
+退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` SIGINT。
 
-`--provider auto` 只有在 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ARK_API_KEY` **恰好设置了一个**时才会自动选择；多个同时存在时必须显式传 `--provider`。
+`--provider auto` 只在 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ARK_API_KEY` 恰好一个存在时自动选择；多个同时存在必须显式传 `--provider`。
 
 ## 工具
 
-模型只看到六个工具，全部通过 Eino `utils.InferTool` 从 Go struct 生成 JSON Schema：
+模型看到八个内置工具（`task` 由 CLI 额外注入时是第九个）：
 
 | 工具 | 行为 | 关键限制 |
 | --- | --- | --- |
-| `read_file` | 带行号读取 UTF-8 文本 | 默认 400 行，最多 2000 行；>10 MiB 文件必须给 `limit` |
-| `list_files` | 列目录树，跳过 `.git`、`node_modules`、`dist` 等 | 深度默认 2、最大 5；默认 500 条、最大 2000 条 |
-| `edit_file` | 唯一子串替换；`old_str` 为空时创建新文件 | 只替换一次；写入采用临时文件 + rename，保留权限 |
-| `bash` | 在工作区根目录执行 `bash -c` | 默认 120s、最大 600s；输出头尾各保留约 128 KiB |
-| `code_search` | 正则搜索，优先 `rg`，否则 Go walker | 默认 100 条、最大 500 条；单文件 `rg` 最多 100 条 |
-| `update_plan` | 创建/替换 `.eino-agent/plan.md` 工作记忆 | 最大 32 KiB；内容整体替换 |
+| `read_file` | 带行号读取 UTF-8 文本 | 默认 400 行，最多 2000；>10 MiB 必须给 `limit` |
+| `list_files` | 目录树，跳过 VCS/依赖/构建目录和 `.einoignore` | 深度默认 2、最大 5；默认 500 条、最大 2000 |
+| `edit_file` | 唯一子串替换；`old_str` 为空时创建 | 只替换一次；默认要求先读；拒绝二进制 |
+| `apply_patch` | unified diff，多文件/多 hunk/新建/删除 | 先校验全部 hunk 再写；拒绝二进制 |
+| `repo_map` | 目录/文件/Go 顶层符号地图 | 只提取 `package`/`func`/`type`；遵守 `.einoignore` |
+| `bash` | 工作区根目录 `bash -c` | 默认 120s、最大 600s；输出头尾各约 128 KiB；超时杀进程组 |
+| `code_search` | 正则搜索，优先 `rg`，否则 Go walker | 默认 100 条、最大 500 条；单文件 `rg` 最多 100 |
+| `update_plan` | 整体替换 `.eino-agent/plan.md` | 最大 32 KiB |
+| `task` | 委派只读子 agent（可选） | 子 agent 无 edit/bash，不能再委派 |
 
-工具的业务错误（文件不存在、`old_str` 不唯一、只读模式禁用、用户拒绝命令）会以 `ERROR: ...` **作为工具输出返回给模型**，不会直接中断 ReAct 图；模型可以据此换一种做法。只有 context 取消这类错误才会终止本轮。
+工具的业务错误以 `ERROR: ...` 作为工具输出返回模型，不会直接中断图；UI 会把 `ERROR:` 和非零 `exit code` 显示为失败。所有工具输出有 256 KiB 硬上限。
 
-所有工具输出还有 256 KiB 的硬上限，超出后截断并标注。
+## 安全边界
 
-## 工作记忆
+工作区由 `internal/workspace` 收口：
 
-长任务可以把目标、决策、改动文件、命令结果、未解决错误和下一步写入 `.eino-agent/plan.md`：
+- 相对/绝对路径都做 `filepath.Rel` 检查；
+- 已存在路径 `EvalSymlinks`，不存在的路径解析最近父目录，防 symlink 逃逸；
+- 列表/搜索/`repo_map` 跳过 `.git`、`node_modules`、`.venv`、`dist`、`build`、`target`、`.cache`、`.dsh/tmp`、`.eino-agent`，以及 `.einoignore` 里的规则；
+- 写入使用同目录临时文件 + `rename`。
 
-- 模型通过 `update_plan` 工具更新；
-- 每次新的一轮会把它作为背景注入，不依赖对话历史；
-- `/plan` 可以直接查看当前内容；
-- 文件放在工作区内，方便用户检查；它不会自动加入 Git，建议按需加入 `.gitignore`。
-
-这层记忆和上下文压缩互补：压缩可能丢细节，但 plan 文件会保留关键进度。
-
-## 上下文管理
-
-上下文分两层处理：
-
-1. **单轮模型调用**：`MessageModifier` 在每次 ChatModel 调用前执行 `internal/contextmgr` 的确定性压缩。顺序是：
-   - 保留 system prompt、最近的 3 个 tool 结果和当前 user 消息；
-   - 更旧的 tool 结果替换成 `[tool output omitted ...]` 占位符，旧的 tool call 参数也会压缩；
-   - 仍然超预算时，按 user turn 从旧到新丢弃整块，保证 tool call / tool result 不被拆散；
-   - 仍然超预算时，截断最大的消息，并标注 `[truncated to save context]`。
-2. **跨轮持久化**：`--history-bytes` 控制保存到 session 的历史总量，`session.Trim` 优先丢掉最旧的消息，并保证第一条是 user；
-3. **手动摘要**：`/compact` 调用模型生成结构化摘要，替换旧历史并保留最近两条消息；摘要写入 session 的可选 `summary` 字段，恢复后作为 background 注入。
-
-ReAct 分支的**自动**压缩是确定性的，不额外调用模型，因此没有摘要成本，也不会因为摘要失败而中断任务；只有显式 `/compact` 才会产生一次摘要调用。token 数默认按 `bytes/3` 估算；每次模型响应带 `prompt_tokens` 时，`usageModel` 会用 provider 的 usage 校准估算比例，后续更接近实际值。默认 32000 对多数模型是安全值，模型上下文更大时可以调高。
-
-被省略/截断的内容会在 prompt 里提示模型：需要细节就带更小的 `limit` / `max_results` 重新调用工具。
-
-## 权限与安全
-
-工作区边界由 `internal/workspace` 统一收口：
-
-- 相对路径、绝对路径都会先做 `filepath.Rel` 检查；
-- 对已存在的路径用 `EvalSymlinks` 解析，对不存在的文件解析其最近的已存在父目录，防止通过 symlink 逃逸；
-- 列表和搜索会跳过 `.git`、`node_modules`、`.venv`、`dist`、`build`、`target`、`.cache`、`.dsh/tmp` 等目录；
-- 文件写入使用同目录临时文件 + `rename`，避免写一半留下损坏文件。
-
-权限模式：
-
-| 模式 | `read_file` / `list_files` / `code_search` | `edit_file` | `bash` |
+| 模式 | 读/列/搜/repo_map | edit/apply_patch | bash/MCP |
 | --- | --- | --- | --- |
-| `ask` | 允许 | 每次询问 | 每次询问 |
+| `ask` | 允许 | 每次审批 | 每次审批 |
 | `read-only` | 允许 | 拒绝 | 拒绝 |
 | `yolo` | 允许 | 直接执行 | 直接执行 |
 
-`ask` 模式在非 TTY（管道、CI）下会**同时拒绝** `edit_file` 和 `bash`，不会卡住等待输入；用户需显式使用 `--permission-mode yolo`。
+`ask` 在非 TTY 下对写操作失败关闭，不会挂起。审批 payload 超过 256 KiB 直接拒绝，不截断后“同意”。`edit_file`/`apply_patch` 默认要求先读当前文件，且文件在读后不能被外部修改；`--no-read-before-edit` 可关闭。
 
-`edit_file` 的审批会展示路径、变更摘要和 unified diff，选项：
+敏感文件（`.env`、`id_rsa`、`*.pem`、`credentials.json` 等）默认拒绝读写；`bash` 默认移除名字含 `API_KEY`/`TOKEN`/`SECRET`/`PASSWORD`/`AWS_*` 的环境变量。它们是默认值，不是 DLP：被批准的 bash 仍可读取文件。真正执行不可信代码时，请使用容器/独立用户。
 
-```text
-[y] 本次应用
-[a] 本进程内始终允许这个文件
-[N] 拒绝
+## 回滚
+
+`edit_file` 和 `apply_patch` 在写前把旧内容快照到 `.eino-agent/checkpoints`：
+
+- 已存在文件备份内容/权限；新文件记录 `existed=false`；
+- `/undo` 恢复最近一个 checkpoint；
+- `/checkpoints` 查看最近记录；
+- 一次多文件 patch 是一个整体，undo 会一起回滚。
+
+边界：只覆盖文件工具，不覆盖 bash 副作用、git 操作、目录/权限变更。
+
+## 上下文与记忆
+
+1. **单轮模型调用**：`MessageModifier` 在每次 ChatModel 前执行确定性压缩：
+   - 保留 system、最近 3 个 tool 结果和当前 user；
+   - 旧 tool 结果替换为占位符，旧 tool call 参数压缩；
+   - 仍超预算时按 user turn 整块丢弃，保证 tool call/result 配对；
+   - 最后才截断最大消息。
+2. **跨轮持久化**：`--history-bytes` 控制 session 历史，`session.Trim` 优先丢最旧消息。
+3. **工作记忆**：`update_plan` 写 `.eino-agent/plan.md`，每轮作为背景注入，跨压缩/重启保留。
+4. **摘要**：`/compact` 调模型生成结构化摘要；ADK 分支用 summarization middleware。
+
+token 默认按 `bytes/3` 估算，provider 返回 `prompt_tokens` 时用 `usageModel` 校准。`--max-total-tokens` 在 session 级累计；达到上限后下一次模型调用失败。`/stats` 查看累计与校准比例。
+
+## Trace 与 Eval
+
+```bash
+./eino-agent --trace .eino-agent/trace.jsonl ...
+jq -c 'select(.type=="tool_start") | {tool,args}' .eino-agent/trace.jsonl
 ```
 
-`bash` 的审批选项：
+JSONL 事件：`turn_start`、`model_start`、`model_end`、`model_error`、`tool_start`、`tool_end`、`turn_end`，公共字段 `ts`/`seq`/`turn`/`type`。字符串截断到 16 KiB；环境变量名含 `KEY`/`TOKEN`/`SECRET`/`PASSWORD` 的值会被替换为 `[redacted]`。
 
-```text
-[y] 本次允许
-[a] 本进程内始终允许这条完全相同的命令
-[N] 拒绝
+fake provider + eval：
+
+```bash
+go test ./internal/agent -run TestEvalScenarios -v
 ```
 
-审批只覆盖 `bash` 和 `edit_file`；`read_file` / `list_files` / `code_search` 不弹窗，`update_plan` 只写 agent 自有的 `.eino-agent/plan.md`。
+场景在 `testdata/scenarios/*.json`，定义 fixtures、fake script、input 和期望（final、工具顺序/次数、禁止工具、文件内容、error）。`internal/eval` 从 trace 提取 `tool_start` 做断言。详细格式见 [`docs/04-trace-and-eval.md`](docs/04-trace-and-eval.md)。
 
-工作区隔离和权限门禁不是操作系统级沙箱。真正执行不可信代码时，仍建议在容器或独立用户下运行。
+## MCP
 
-## 会话
+```json
+{
+  "servers": [
+    {
+      "name": "filesystem",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "tools": ["read_file", "list_directory"],
+      "timeout_seconds": 20
+    }
+  ]
+}
+```
 
-- 每轮成功结束后保存一次，只保存最终的 user / assistant 消息，不保存 ReAct 中间的 tool 消息；
-- JSON 格式，`version: 1`，原子写入，权限 `0600`；
-- 默认目录：`os.UserConfigDir()/eino-agent/sessions`；
-- `--resume <id>` 在 session 目录中查找，`--resume <path.json>` 直接读文件；
-- 恢复时会提示 session 记录的工作区与当前工作区是否不同；
-- 历史按近似字节数裁剪，优先丢弃最旧的消息，并保证第一条是 user。
+```bash
+./eino-agent --mcp-config ./mcp.json --permission-mode ask --workspace .
+```
+
+工具名变成 `mcp__<server>__<tool>`；每次调用走审批。server 是独立进程，agent 只能控制“是否调用”，不能限制其内部行为；配置和环境变量按可信代码审查。详见 [`docs/mcp.md`](docs/mcp.md)。
 
 ## 架构
 
@@ -178,19 +195,31 @@ ReAct 分支的**自动**压缩是确定性的，不额外调用模型，因此�
 cmd/eino-agent/main.go
         │
         ├── internal/config      flag + env → Config
-        ├── internal/model       openai / claude / ark 适配器
-        ├── internal/workspace   路径解析与工作区边界
-        ├── internal/tools       6 个工具 + 错误软化 + 输出上限
-        ├── internal/memory      .eino-agent/plan.md 工作记忆
-        ├── internal/summary     结构化摘要（/compact）
-        ├── internal/approval    bash / edit 人工审批
-        ├── internal/agent       Eino ReAct + system prompt + callbacks
-        ├── internal/contextmgr  确定性上下文压缩
+        ├── internal/model       openai / claude / ark / fake + usage + retry
+        ├── internal/workspace   路径边界 + .einoignore
+        ├── internal/tools       内置工具 + 错误软化 + 输出上限
+        ├── internal/patch       unified diff 解析/应用
+        ├── internal/checkpoint  文件快照 + /undo
+        ├── internal/filestate   读后写状态
+        ├── internal/approval    单 stdin owner + 审批
+        ├── internal/input       stdin 单所有者
+        ├── internal/trace       JSONL 事件
+        ├── internal/eval        fake provider 场景
+        ├── internal/repomap     仓库地图
+        ├── internal/policy      敏感文件/环境变量
+        ├── internal/budget      token 预算
+        ├── internal/retry       指数退避
+        ├── internal/subagent    只读嵌套 runner + task
+        ├── internal/mcp         stdio MCP 工具
+        ├── internal/agent       Eino ReAct + prompt + callbacks
+        ├── internal/contextmgr  确定性压缩
+        ├── internal/memory      plan 工作记忆
+        ├── internal/summary     /compact
         ├── internal/session     JSON 快照
         └── internal/ui          终端渲染
 ```
 
-一轮对话的数据流：
+一轮数据流：
 
 ```text
 user input
@@ -202,12 +231,12 @@ user input
   → persist user + assistant
 ```
 
-几个实现要点：
+实现要点：
 
-- `MaxStep = 30`，工具串行执行，未知工具通过 `UnknownToolsHandler` 返回可用工具列表；
-- 流式模式使用自定义 `StreamToolCallChecker`，会一直读到出现 tool call 或 EOF，兼容 Claude 这类先输出文本再发 tool call 的 provider；
-- system prompt 通过 `MessageModifier` 注入，保证每轮模型调用都以 system 开头；
-- 自动读取工作区根目录第一个 `AGENTS.md` / `AGENT.md` / `CLAUDE.md`，最多 16 KiB，作为项目级补充说明；
+- 工具串行执行，未知工具通过 `UnknownToolsHandler` 返回可用工具列表；
+- 流式 `StreamToolCallChecker` 读到 tool call 或 EOF，兼容 Claude 这类先文本后 tool call 的 provider；
+- system prompt 通过 `MessageModifier` 注入，保证每次模型调用都以 system 开头；
+- 自动读取根目录第一个 `AGENTS.md`/`AGENT.md`/`CLAUDE.md`（最多 16 KiB），支持 `@relative/path` 递归 import；
 - 工具生命周期用 Eino callbacks 渲染，不在 agent 包里重写 ReAct 循环。
 
 ## 开发与测试
@@ -217,31 +246,52 @@ cd eino-agent
 go build ./...
 go vet ./...
 go test ./...
+go test -race ./...
 ```
 
 测试不需要 API key：
 
-- `internal/agent` 用一个脚本化的 fake `ToolCallingChatModel` 驱动**真实 ReAct 图 + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复、上下文压缩；
-- `internal/contextmgr` 覆盖 token 估算、provider usage 校准、旧 tool 结果占位、旧 turn 丢弃、tool call 配对和超大消息截断；
-- `internal/summary` 覆盖结构化摘要 prompt 和空输出错误；`internal/memory` 覆盖 plan 读写与注入；
-- `internal/tools` 覆盖读、写、列目录、bash 审批/超时/截断、搜索 fallback；
-- `internal/approval` 覆盖 bash/edit 审批、always 记忆、read-only 和非 TTY 拒绝；
-- `internal/workspace` 覆盖路径逃逸和 symlink 逃逸；
-- `internal/session` 覆盖保存、恢复、裁剪；
-- `internal/config` 覆盖 flag/env 优先级和错误输入。
+- `internal/agent`：fake `ToolCallingChatModel` 驱动真实 ReAct 图 + 真实工具；
+- `internal/agent` eval：`testdata/scenarios` 的确定性场景；
+- `internal/contextmgr`：token 估算、校准、tool 配对、整块丢弃、截断；
+- `internal/tools`：读/写/列/搜索/bash 审批/超时/截断、patch、repo_map、policy；
+- `internal/approval`：交互、always 记忆、read-only、非 TTY、超大 payload；
+- `internal/checkpoint` / `filestate`：快照/undo、读后写；
+- `internal/patch`：多文件/hunk、上下文不匹配、行数校验；
+- `internal/mcp`：配置校验、gating、真实 stdio server 集成；
+- `internal/trace`：脱敏、截断、JSONL 合法性；
+- `internal/model`：fake script、retry、budget；
+- `internal/workspace`：路径/symlink 逃逸、`.einoignore`；
+- `internal/session`：保存/恢复/裁剪。
+
+## 教学文档
+
+完整学习路径见 [`docs/README.md`](docs/README.md)：
+
+```text
+docs/01-agent-loop.md          ReAct 控制流与流式 checker
+docs/02-tools-and-workspace.md 工具协议、边界、审批、patch、checkpoint
+docs/03-context-and-memory.md  压缩、token、plan、session
+docs/04-trace-and-eval.md      trace 字段与 eval 场景
+docs/05-capabilities.md        v2 能力逐项拆解
+docs/06-react-vs-adk.md        两分支对比
+docs/07-failure-gallery.md     失败模式与回归测试
+docs/mcp.md                    MCP 接入
+```
 
 ## 已知限制
 
-- 这是教学/演示向的简化实现，不是 Claude Code / Codex 的完整替代品；
-- 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引；
-- ReAct 分支自动压缩是确定性的，只有 `/compact` 才调用模型做结构化摘要；ADK 分支使用 ADK 的 summarization middleware；
-- `bash` 超时依赖 `exec.CommandContext`，被杀的是 shell 进程本身，极端情况下子进程可能残留；
-- 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证。
+- 教学/演示向实现，不是 Claude Code / Codex 的完整替代品；
+- 没有多模态输入、持久化向量索引、并行子 agent；
+- `repo_map` 的符号提取是正则，不是 AST/语言服务器；
+- `.einoignore` 是 gitignore 子集，不是完整实现；
+- retry 是字符串启发式，且只重试“创建流”阶段；
+- trace 可能包含源码/用户输入，上传前需自行脱敏；
+- 没有真实 provider 的网络集成测试；需要 API key 才能做端到端验证；
+- ADK 分支的 checkpoint 语义与 ReAct 文件级 undo 不同，见对应分支文档。
 
 ## 设计文档
 
-完整设计见仓库根目录：
-
 ```text
-.dsh/docs/specs/2026-10-26-eino-code-agent-design.md
+../.dsh/docs/specs/2026-10-26-eino-code-agent-design.md
 ```

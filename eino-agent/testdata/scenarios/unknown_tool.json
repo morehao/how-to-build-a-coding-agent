@@ -1,0 +1,12 @@
+{
+  "name": "unknown_tool_recovery",
+  "script": {
+    "name": "unknown-tool",
+    "steps": [
+      {"tool_calls": [{"name": "no_such_tool", "arguments": "{}"}]},
+      {"content": "used the available tools instead"}
+    ]
+  },
+  "input": "use a tool",
+  "expect": {"final_contains": ["available tools"]}
+}

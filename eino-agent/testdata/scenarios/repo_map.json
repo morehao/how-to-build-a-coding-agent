@@ -1,0 +1,27 @@
+{
+  "name": "repo_map_symbols",
+  "files": {
+    "main.go": "package main\n\nfunc main() {}\n"
+  },
+  "script": {
+    "name": "map",
+    "steps": [
+      {
+        "tool_calls": [
+          {
+            "name": "repo_map",
+            "arguments": "{\"path\":\".\"}"
+          }
+        ]
+      },
+      {
+        "content": "mapped"
+      }
+    ]
+  },
+  "input": "summarize the repository",
+  "expect": {
+    "final_contains": ["mapped"],
+    "tools": ["repo_map"]
+  }
+}

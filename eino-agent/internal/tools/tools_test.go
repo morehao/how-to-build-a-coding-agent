@@ -420,3 +420,13 @@ func TestEditTTYAskApprove(t *testing.T) {
 		t.Fatalf("approval output:\n%s", out.String())
 	}
 }
+
+func TestEditRejectsBinary(t *testing.T) {
+	o, dir := testOptions(t)
+	if err := os.WriteFile(filepath.Join(dir, "bin.dat"), []byte("a\x00b"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := o.editFile(context.Background(), editFileInput{Path: "bin.dat", OldStr: "a", NewStr: "c"}); err == nil || !strings.Contains(err.Error(), "binary") {
+		t.Fatalf("err = %v", err)
+	}
+}

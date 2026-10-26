@@ -31,6 +31,7 @@ const (
 	ProviderOpenAI = "openai"
 	ProviderClaude = "claude"
 	ProviderArk    = "ark"
+	ProviderFake   = "fake"
 )
 
 // Config is the fully resolved runtime configuration.
@@ -50,6 +51,19 @@ type Config struct {
 	Verbose        bool
 	Prompt         string
 	ShowVersion    bool
+
+	// New in v2.
+	Script           string
+	Trace            string
+	NoCheckpoints    bool
+	NoReadBeforeEdit bool
+	AllowSensitive   bool
+	AllowEnv         bool
+	MaxRetries       int
+	RetryBaseMS      int
+	MaxTotalTokens   int
+	MaxTokens        int
+	MCPConfig        string
 }
 
 // ErrHelp is returned when the user requested usage information.
@@ -66,20 +80,31 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.SetOutput(io.Discard)
 
 	var (
-		provider       string
-		modelName      string
-		baseURL        string
-		workspace      string
-		maxSteps       int
-		historyBytes   int
-		contextTokens  int
-		permissionMode string
-		sessionDir     string
-		resume         string
-		noStream       bool
-		verbose        bool
-		prompt         string
-		showVersion    bool
+		provider         string
+		modelName        string
+		baseURL          string
+		workspace        string
+		maxSteps         int
+		historyBytes     int
+		contextTokens    int
+		permissionMode   string
+		sessionDir       string
+		resume           string
+		noStream         bool
+		verbose          bool
+		prompt           string
+		showVersion      bool
+		script           string
+		tracePath        string
+		noCheckpoints    bool
+		noReadBeforeEdit bool
+		allowSensitive   bool
+		allowEnv         bool
+		maxRetries       int
+		retryBaseMS      int
+		maxTotalTokens   int
+		maxTokens        int
+		mcpConfig        string
 	)
 
 	fs.StringVar(&provider, "provider", "", "model provider: auto|openai|claude|ark")
@@ -97,6 +122,17 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&prompt, "prompt", "", "run one prompt and exit")
 	fs.StringVar(&prompt, "p", "", "shorthand for --prompt")
 	fs.BoolVar(&showVersion, "version", false, "print version and exit")
+	fs.StringVar(&script, "script", "", "fake-provider script (JSON) for --provider fake")
+	fs.StringVar(&tracePath, "trace", "", "write a JSONL trace of this run to a file")
+	fs.BoolVar(&noCheckpoints, "no-checkpoints", false, "disable file snapshots used by /undo")
+	fs.BoolVar(&noReadBeforeEdit, "no-read-before-edit", false, "allow edit_file/apply_patch without a prior read")
+	fs.BoolVar(&allowSensitive, "allow-sensitive", false, "allow reading .env, keys and credentials files")
+	fs.BoolVar(&allowEnv, "allow-env", false, "pass the full environment (including API keys) to bash")
+	fs.IntVar(&maxRetries, "max-retries", 0, "retry model calls on 429/5xx/timeouts (default: 2)")
+	fs.IntVar(&retryBaseMS, "retry-base-ms", 0, "base delay for retries in milliseconds (default: 500)")
+	fs.IntVar(&maxTotalTokens, "max-total-tokens", 0, "abort after this many total tokens (0 = unlimited)")
+	fs.IntVar(&maxTokens, "max-tokens", 0, "maximum completion tokens for Claude (default: 8192)")
+	fs.StringVar(&mcpConfig, "mcp-config", "", "JSON file listing MCP servers to load")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -128,10 +164,28 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		cfg.Provider = p
 	}
 	if !isKnownProvider(cfg.Provider) {
-		return nil, fmt.Errorf("unknown provider %q (want auto|openai|claude|ark)", cfg.Provider)
+		return nil, fmt.Errorf("unknown provider %q (want auto|openai|claude|ark|fake)", cfg.Provider)
+	}
+
+	cfg.Script = firstNonEmpty(script, getenv("EINO_AGENT_SCRIPT"))
+	if cfg.Script != "" {
+		absScript, err := filepath.Abs(cfg.Script)
+		if err != nil {
+			return nil, fmt.Errorf("resolve script: %w", err)
+		}
+		if _, err := os.Stat(absScript); err != nil {
+			return nil, fmt.Errorf("script %s: %w", absScript, err)
+		}
+		cfg.Script = absScript
+	}
+	if cfg.Provider == ProviderFake && cfg.Script == "" {
+		return nil, fmt.Errorf("--provider fake requires --script <file.json>")
 	}
 
 	cfg.Model = firstNonEmpty(modelName, providerModelEnv(getenv, cfg.Provider), getenv("EINO_AGENT_MODEL"))
+	if cfg.Model == "" && cfg.Provider == ProviderFake {
+		cfg.Model = "scripted"
+	}
 	if cfg.Model == "" {
 		return nil, fmt.Errorf("missing model name: pass --model or set %s", providerModelEnvName(cfg.Provider))
 	}
@@ -141,9 +195,13 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		cfg.BaseURL = "https://ark.cn-beijing.volces.com/api/v3"
 	}
 
-	cfg.APIKey = providerAPIKey(getenv, cfg.Provider)
-	if cfg.APIKey == "" {
-		return nil, fmt.Errorf("missing %s: export it before running eino-agent", providerAPIKeyEnvName(cfg.Provider))
+	if cfg.Provider == ProviderFake {
+		cfg.APIKey = "fake"
+	} else {
+		cfg.APIKey = providerAPIKey(getenv, cfg.Provider)
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("missing %s: export it before running eino-agent", providerAPIKeyEnvName(cfg.Provider))
+		}
 	}
 
 	cfg.Workspace = firstNonEmpty(workspace, getenv("EINO_AGENT_WORKSPACE"), ".")
@@ -204,6 +262,47 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	cfg.Prompt = firstNonEmpty(prompt, getenv("EINO_AGENT_PROMPT"))
 	cfg.NoStream = boolValue(visited["no-stream"], noStream, getenv("EINO_AGENT_NO_STREAM"))
 	cfg.Verbose = boolValue(visited["verbose"], verbose, getenv("EINO_AGENT_VERBOSE"))
+	cfg.NoCheckpoints = boolValue(visited["no-checkpoints"], noCheckpoints, getenv("EINO_AGENT_NO_CHECKPOINTS"))
+	cfg.NoReadBeforeEdit = boolValue(visited["no-read-before-edit"], noReadBeforeEdit, getenv("EINO_AGENT_NO_READ_BEFORE_EDIT"))
+	cfg.AllowSensitive = boolValue(visited["allow-sensitive"], allowSensitive, getenv("EINO_AGENT_ALLOW_SENSITIVE"))
+	cfg.AllowEnv = boolValue(visited["allow-env"], allowEnv, getenv("EINO_AGENT_ALLOW_ENV"))
+
+	cfg.Trace = firstNonEmpty(tracePath, getenv("EINO_AGENT_TRACE"))
+	if cfg.Trace != "" {
+		absTrace, err := filepath.Abs(cfg.Trace)
+		if err != nil {
+			return nil, fmt.Errorf("resolve trace: %w", err)
+		}
+		cfg.Trace = absTrace
+	}
+
+	cfg.MaxRetries, err = intValue(visited["max-retries"], maxRetries, getenv("EINO_AGENT_MAX_RETRIES"), 2)
+	if err != nil || cfg.MaxRetries < 0 || cfg.MaxRetries > 10 {
+		return nil, fmt.Errorf("max-retries must be between 0 and 10")
+	}
+	cfg.RetryBaseMS, err = intValue(visited["retry-base-ms"], retryBaseMS, getenv("EINO_AGENT_RETRY_BASE_MS"), 500)
+	if err != nil || cfg.RetryBaseMS < 0 || cfg.RetryBaseMS > 60000 {
+		return nil, fmt.Errorf("retry-base-ms must be between 0 and 60000")
+	}
+	cfg.MaxTotalTokens, err = intValue(visited["max-total-tokens"], maxTotalTokens, getenv("EINO_AGENT_MAX_TOTAL_TOKENS"), 0)
+	if err != nil || cfg.MaxTotalTokens < 0 {
+		return nil, fmt.Errorf("max-total-tokens must be >= 0")
+	}
+	cfg.MaxTokens, err = intValue(visited["max-tokens"], maxTokens, getenv("EINO_AGENT_MAX_TOKENS"), 8192)
+	if err != nil || cfg.MaxTokens < 1 {
+		return nil, fmt.Errorf("max-tokens must be >= 1")
+	}
+	cfg.MCPConfig = firstNonEmpty(mcpConfig, getenv("EINO_AGENT_MCP_CONFIG"))
+	if cfg.MCPConfig != "" {
+		absMCP, err := filepath.Abs(cfg.MCPConfig)
+		if err != nil {
+			return nil, fmt.Errorf("resolve mcp-config: %w", err)
+		}
+		if _, err := os.Stat(absMCP); err != nil {
+			return nil, fmt.Errorf("mcp-config %s: %w", absMCP, err)
+		}
+		cfg.MCPConfig = absMCP
+	}
 
 	return cfg, nil
 }
@@ -216,8 +315,8 @@ Usage:
   eino-agent [flags]
   eino-agent -p "read go.mod and summarize it"
 
-Flags:
-  --provider string         auto|openai|claude|ark (default: auto)
+Core flags:
+  --provider string         auto|openai|claude|ark|fake (default: auto)
   --model string            model name; for ark, the endpoint id
   --base-url string         OpenAI-compatible or Anthropic base URL
   --workspace string        workspace directory (default: current directory)
@@ -233,16 +332,39 @@ Flags:
   --version                 print version and exit
   -h, --help                print this help
 
+Safety and reliability:
+  --max-tokens int          maximum completion tokens for Claude (default: 8192)
+  --max-total-tokens int    abort after this many total tokens (0 = unlimited)
+  --max-retries int         retries for 429/5xx/timeouts (default: 2)
+  --retry-base-ms int       base backoff delay in ms (default: 500)
+  --no-checkpoints          disable file snapshots used by /undo
+  --no-read-before-edit     allow edits without reading the current file first
+  --allow-sensitive         allow reading .env, keys and credential files
+  --allow-env               pass the full environment to bash (default: scrub secrets)
+
+Observability and tools:
+  --trace string            write a JSONL trace (turn/model/tool events)
+  --script string           fake-provider script JSON (for --provider fake)
+  --mcp-config string       JSON file listing stdio MCP servers
+
 Environment:
   EINO_AGENT_PROVIDER, EINO_AGENT_MODEL, EINO_AGENT_WORKSPACE,
   EINO_AGENT_MAX_STEPS, EINO_AGENT_HISTORY_BYTES, EINO_AGENT_CONTEXT_TOKENS,
   EINO_AGENT_PERMISSION_MODE, EINO_AGENT_SESSION_DIR, EINO_AGENT_RESUME,
-  EINO_AGENT_NO_STREAM, EINO_AGENT_VERBOSE, EINO_AGENT_PROMPT
+  EINO_AGENT_NO_STREAM, EINO_AGENT_VERBOSE, EINO_AGENT_PROMPT,
+  EINO_AGENT_TRACE, EINO_AGENT_SCRIPT, EINO_AGENT_MCP_CONFIG,
+  EINO_AGENT_MAX_RETRIES, EINO_AGENT_RETRY_BASE_MS, EINO_AGENT_MAX_TOTAL_TOKENS,
+  EINO_AGENT_MAX_TOKENS, EINO_AGENT_NO_CHECKPOINTS, EINO_AGENT_NO_READ_BEFORE_EDIT,
+  EINO_AGENT_ALLOW_SENSITIVE, EINO_AGENT_ALLOW_ENV
 
 Provider credentials:
   openai:  OPENAI_API_KEY,  optional OPENAI_BASE_URL,  OPENAI_MODEL
   claude:  ANTHROPIC_API_KEY, optional ANTHROPIC_BASE_URL, ANTHROPIC_MODEL
   ark:     ARK_API_KEY,     optional ARK_BASE_URL,     ARK_MODEL
+  fake:    no key; requires --script
+
+Slash commands in the REPL:
+  /help /clear /compact /plan /session /stats /undo /checkpoints /exit
 
 Examples:
   export OPENAI_API_KEY=sk-...
@@ -251,8 +373,12 @@ Examples:
   export ANTHROPIC_API_KEY=sk-ant-...
   eino-agent --provider claude --model <claude-model> --workspace .
 
-  export ARK_API_KEY=...
-  eino-agent --provider ark --model <endpoint-id> --workspace .
+  # Reproducible run: no network, scripted tool calls
+  eino-agent --provider fake --script testdata/scenarios/read_edit.json --workspace .
+
+  # Trace + eval
+  eino-agent --trace .eino-agent/trace.jsonl --workspace .
+  go test ./internal/agent -run TestEvalScenarios -v
 `
 }
 
@@ -279,7 +405,7 @@ func detectProvider(getenv func(string) string) (string, error) {
 
 func isKnownProvider(p string) bool {
 	switch p {
-	case ProviderOpenAI, ProviderClaude, ProviderArk:
+	case ProviderOpenAI, ProviderClaude, ProviderArk, ProviderFake:
 		return true
 	default:
 		return false

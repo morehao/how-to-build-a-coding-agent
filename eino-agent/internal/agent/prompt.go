@@ -54,26 +54,67 @@ func BuildSystemPrompt(ws *workspace.Workspace, mode string) (string, error) {
 }
 
 // LoadProjectInstructions returns the first existing instruction file and its
-// content, truncated to 16 KiB. Missing files are not an error.
+// content, truncated to 16 KiB. A line of the form "@relative/path" imports
+// another instruction file, recursively (depth 3), so nested AGENTS.md files can
+// be composed explicitly. Missing files are not an error.
 func LoadProjectInstructions(ws *workspace.Workspace) (string, string) {
 	for _, name := range []string{"AGENTS.md", "AGENT.md", "CLAUDE.md"} {
 		path := filepath.Join(ws.Root(), name)
-		f, err := os.Open(path)
-		if err != nil {
+		content, err := readInstructions(ws, path, 0, map[string]bool{})
+		if err != nil || content == "" {
 			continue
 		}
-		data, readErr := io.ReadAll(io.LimitReader(f, maxProjectInstructions+1))
-		_ = f.Close()
-		if readErr != nil {
-			continue
-		}
-		content := string(data)
 		if len(content) > maxProjectInstructions {
 			content = truncateUTF8Bytes(content, maxProjectInstructions) + "\n... [truncated]"
 		}
 		return name, content
 	}
 	return "", ""
+}
+
+func readInstructions(ws *workspace.Workspace, path string, depth int, seen map[string]bool) (string, error) {
+	if depth > 3 {
+		return "", fmt.Errorf("instruction imports nested too deeply at %s", path)
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if rel := ws.Rel(abs); filepath.IsAbs(rel) {
+		return "", fmt.Errorf("instruction file outside workspace: %s", abs)
+	}
+	if seen[abs] {
+		return "", nil
+	}
+	seen[abs] = true
+	f, err := os.Open(abs)
+	if err != nil {
+		return "", err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, maxProjectInstructions+1))
+	_ = f.Close()
+	if readErr != nil {
+		return "", readErr
+	}
+	if len(data) > maxProjectInstructions {
+		return truncateUTF8Bytes(string(data), maxProjectInstructions) + "\n... [truncated]", nil
+	}
+	var b strings.Builder
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "@") && len(trimmed) > 1 {
+			target := strings.TrimSpace(strings.TrimPrefix(trimmed, "@"))
+			targetPath := filepath.Join(filepath.Dir(abs), filepath.FromSlash(target))
+			imported, importErr := readInstructions(ws, targetPath, depth+1, seen)
+			if importErr == nil && imported != "" {
+				fmt.Fprintf(&b, "\n<!-- import %s -->\n%s\n", target, imported)
+			}
+			continue
+		}
+		b.WriteString(line)
+		b.WriteByte('\n')
+	}
+	return b.String(), nil
 }
 
 // Modifier returns a react.MessageModifier that prepends the system prompt and

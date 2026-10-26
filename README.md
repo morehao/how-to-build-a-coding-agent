@@ -309,6 +309,39 @@ hello          # Greeting script
 
 ---
 
+
+---
+
+## 🧪 Advanced Track: The Eino Agent Module
+
+The workshop files above are intentionally small. For a more complete, runnable agent, see the independent Go module in [`eino-agent/`](eino-agent/README.md):
+
+| Branch | Runtime | What to study |
+| --- | --- | --- |
+| `feat/eino-code-agent` | Eino `flow/agent/react` | Smallest complete ReAct loop, streaming, tool errors |
+| `feat/eino-code-agent-adk` | Eino ADK `ChatModelAgent` + `Runner` | Middleware, checkpoint, interrupt/resume |
+
+It adds the parts that make an agent usable beyond a demo:
+
+- workspace jail, approval modes, single stdin owner;
+- read-before-edit, `apply_patch`, file checkpoints and `/undo`;
+- `repo_map` + `.einoignore`;
+- retry/backoff and a session token budget;
+- sensitive-file and environment-variable policy;
+- JSONL trace, deterministic fake provider, and eval scenarios;
+- stdio MCP tools and a read-only `task` subagent.
+
+```bash
+cd eino-agent
+go test ./...                       # no API key needed
+go test ./internal/agent -run TestEvalScenarios -v
+go build -o eino-agent ./cmd/eino-agent
+./eino-agent --provider fake \
+  --script testdata/scenarios/read_edit.json --workspace /tmp/eino-demo --no-stream
+```
+
+Start with [`eino-agent/docs/README.md`](eino-agent/docs/README.md): it is a guided path from the ReAct loop to trace/eval and the failure gallery.
+
 ## 🚀 What's Next?
 
 Once you complete the workshop, try building:

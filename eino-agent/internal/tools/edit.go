@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/approval"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/policy"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
@@ -31,6 +33,9 @@ func (o *Options) editFile(ctx context.Context, in editFileInput) (string, error
 		return "", err
 	}
 	rel := o.Workspace.Rel(path)
+	if !o.AllowSensitive && policy.IsSensitive(rel) {
+		return "", fmt.Errorf("refusing to edit sensitive file %s; pass --allow-sensitive to override", rel)
+	}
 
 	info, statErr := os.Stat(path)
 	switch {
@@ -43,9 +48,17 @@ func (o *Options) editFile(ctx context.Context, in editFileInput) (string, error
 		if info.Size() > 10*1024*1024 {
 			return "", fmt.Errorf("%s is %s; refusing to edit files larger than 10 MiB", rel, humanBytes(info.Size()))
 		}
+		if o.Files != nil && o.EnforceReadBeforeEdit {
+			if err := o.Files.Check(path); err != nil {
+				return "", fmt.Errorf("%s: %w", rel, err)
+			}
+		}
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return "", fmt.Errorf("read %s: %w", rel, err)
+		}
+		if bytes.IndexByte(content, 0) >= 0 {
+			return "", fmt.Errorf("%s appears to be binary; edit_file only supports UTF-8 text", rel)
 		}
 		count := strings.Count(string(content), in.OldStr)
 		if count == 0 {
@@ -58,8 +71,16 @@ func (o *Options) editFile(ctx context.Context, in editFileInput) (string, error
 		if err := approveEdit(ctx, o, rel, string(content), updated, in.OldStr, in.NewStr, false); err != nil {
 			return "", err
 		}
+		if o.Checkpoints != nil {
+			if _, err := o.Checkpoints.Snapshot("edit_file: "+rel, []string{path}); err != nil {
+				return "", err
+			}
+		}
 		if err := workspace.WriteFileAtomic(path, []byte(updated), info.Mode()); err != nil {
 			return "", fmt.Errorf("write %s: %w", rel, err)
+		}
+		if o.Files != nil {
+			_ = o.Files.MarkRead(path)
 		}
 		return fmt.Sprintf("OK: edited %s (%d -> %d bytes)", rel, len(content), len(updated)), nil
 
@@ -70,8 +91,16 @@ func (o *Options) editFile(ctx context.Context, in editFileInput) (string, error
 		if err := approveEdit(ctx, o, rel, "", in.NewStr, "", in.NewStr, true); err != nil {
 			return "", err
 		}
+		if o.Checkpoints != nil {
+			if _, err := o.Checkpoints.Snapshot("edit_file create: "+rel, []string{path}); err != nil {
+				return "", err
+			}
+		}
 		if err := workspace.WriteFileAtomic(path, []byte(in.NewStr), 0o644); err != nil {
 			return "", fmt.Errorf("create %s: %w", rel, err)
+		}
+		if o.Files != nil {
+			_ = o.Files.MarkRead(path)
 		}
 		return fmt.Sprintf("OK: created %s (%d bytes)", rel, len(in.NewStr)), nil
 

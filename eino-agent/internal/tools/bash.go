@@ -11,6 +11,7 @@ import (
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/approval"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/policy"
 )
 
 type bashInput struct {
@@ -58,8 +59,17 @@ func (o *Options) bash(ctx context.Context, in bashInput) (string, error) {
 	defer cancel()
 
 	cmd := exec.CommandContext(runCtx, "bash", "-c", command)
+	cmd.WaitDelay = 2 * time.Second
+	configureProcess(cmd)
+	cmd.Cancel = func() error {
+		killProcessGroup(cmd)
+		if cmd.Process != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
 	cmd.Dir = o.Workspace.Root()
-	cmd.Env = append(os.Environ(), "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat")
+	cmd.Env = append(policy.SanitizedEnv(os.Environ(), o.AllowEnv), "TERM=dumb", "PAGER=cat", "GIT_PAGER=cat")
 	buf := newCappedBuffer(o.MaxOutputBytes/2, o.MaxOutputBytes/2)
 	cmd.Stdout = buf
 	cmd.Stderr = buf

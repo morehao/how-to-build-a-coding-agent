@@ -17,6 +17,13 @@ import (
 // configuration; no network request is made here.
 func New(ctx context.Context, cfg *config.Config) (model.ToolCallingChatModel, error) {
 	switch cfg.Provider {
+	case config.ProviderFake:
+		script, err := LoadFakeScript(cfg.Script)
+		if err != nil {
+			return nil, err
+		}
+		return NewFakeModel(script)
+
 	case config.ProviderOpenAI, config.ProviderArk:
 		cm, err := openai.NewChatModel(ctx, &openai.ChatModelConfig{
 			APIKey:  cfg.APIKey,
@@ -39,7 +46,7 @@ func New(ctx context.Context, cfg *config.Config) (model.ToolCallingChatModel, e
 			APIKey:         cfg.APIKey,
 			BaseURL:        baseURL,
 			Model:          cfg.Model,
-			MaxTokens:      8192,
+			MaxTokens:      cfg.MaxTokens,
 			RequestTimeout: 120 * time.Second,
 		})
 		if err != nil {

@@ -12,8 +12,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
 type codeSearchInput struct {
@@ -202,7 +200,7 @@ func (o *Options) searchWithWalk(ctx context.Context, target string, in codeSear
 				return ctx.Err()
 			}
 			fullRel := o.Workspace.Rel(path)
-			if workspace.IsIgnoredRel(fullRel) {
+			if o.Workspace.Ignored(fullRel) {
 				if d.IsDir() {
 					return fs.SkipDir
 				}

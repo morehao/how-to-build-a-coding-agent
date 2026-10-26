@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/input"
 )
 
 func TestApprovalModes(t *testing.T) {
@@ -95,5 +96,18 @@ func TestApprovalEditNonTTYDenied(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "non-interactive") {
 		t.Fatalf("missing non-interactive warning: %q", out.String())
+	}
+}
+
+func TestApprovalRefusesOversizedPayload(t *testing.T) {
+	var out bytes.Buffer
+	lines := input.New(strings.NewReader("y\n"))
+	a := NewWithSource(config.PermissionAsk, lines, &out, true)
+	d, err := a.Approve(context.Background(), Request{Kind: KindBash, Command: strings.Repeat("x", maxReviewBytes+1)})
+	if err != nil || d != Deny {
+		t.Fatalf("oversized = %v, %v", d, err)
+	}
+	if !strings.Contains(out.String(), "too large") {
+		t.Fatalf("missing refusal: %s", out.String())
 	}
 }

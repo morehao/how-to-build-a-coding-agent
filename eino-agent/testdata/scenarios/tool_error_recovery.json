@@ -1,0 +1,15 @@
+{
+  "name": "tool_error_recovery",
+  "script": {
+    "name": "missing-file",
+    "steps": [
+      {"tool_calls": [{"name": "read_file", "arguments": "{\"path\":\"missing.txt\"}"}]},
+      {"content": "recovered from the error"}
+    ]
+  },
+  "input": "read missing.txt",
+  "expect": {
+    "final_contains": ["recovered"],
+    "tools": ["read_file"]
+  }
+}

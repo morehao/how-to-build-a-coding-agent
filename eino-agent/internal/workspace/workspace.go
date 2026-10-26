@@ -14,7 +14,8 @@ import (
 
 // Workspace is a resolved, symlink-free root directory.
 type Workspace struct {
-	root string
+	root   string
+	ignore *Ignore
 }
 
 // New resolves root to an absolute path, evaluates symlinks on the root itself,
@@ -38,7 +39,7 @@ func New(root string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("workspace root %s is not a directory", real)
 	}
-	return &Workspace{root: real}, nil
+	return &Workspace{root: real, ignore: LoadIgnore(real)}, nil
 }
 
 // Root returns the resolved absolute workspace root.
@@ -94,6 +95,7 @@ func IsIgnoredDir(name string) bool {
 		"dist", "build", "target", ".next", ".nuxt", ".cache",
 		"vendor",
 		".idea",
+		".eino-agent",
 		".DS_Store":
 		return true
 	default:
@@ -115,6 +117,17 @@ func IsIgnoredRel(rel string) bool {
 		}
 	}
 	return false
+}
+
+// Ignored reports whether rel is ignored by the built-in list or .einoignore.
+func (w *Workspace) Ignored(rel string) bool {
+	if IsIgnoredRel(rel) {
+		return true
+	}
+	if w == nil || w.ignore == nil {
+		return false
+	}
+	return w.ignore.Match(rel)
 }
 
 // WriteFileAtomic writes data to path via a same-directory temporary file and
