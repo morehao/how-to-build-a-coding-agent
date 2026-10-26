@@ -1,4 +1,4 @@
-.PHONY: build fmt check clean all eino-agent-build eino-agent-test eino-agent-eval
+.PHONY: build fmt check clean all eino-agent-build eino-agent-test eino-agent-eval eino-agent-adk-eval
 
 # Go binaries to build
 BINARIES := bash_tool chat edit_tool list_files read
@@ -45,6 +45,9 @@ eino-agent-test:
 
 eino-agent-eval:
 	cd eino-agent && go test ./internal/agent -run TestEvalScenarios -v
+
+eino-agent-adk-eval:
+	cd eino-agent && go test ./internal/agentadk -run TestADKEvalScenarios -v
 
 # Default target
 .DEFAULT_GOAL := all

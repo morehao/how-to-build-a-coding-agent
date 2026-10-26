@@ -25,9 +25,16 @@
 cd eino-agent
 go test ./...                       # 不需要 API key
 go test ./internal/agent -run TestEvalScenarios -v
+go test ./internal/agentadk -run TestADKEvalScenarios -v
 
 go build -o eino-agent ./cmd/eino-agent
+go build -o eino-agent-adk ./cmd/eino-agent-adk
+
+# 两个入口共用 fake script 和 eval 场景
 ./eino-agent --provider fake \
+  --script testdata/scenarios/read_edit.json \
+  --workspace /tmp/eino-demo --no-stream
+./eino-agent-adk --provider fake \
   --script testdata/scenarios/read_edit.json \
   --workspace /tmp/eino-demo --no-stream
 ```
