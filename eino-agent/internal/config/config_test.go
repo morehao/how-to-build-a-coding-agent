@@ -202,3 +202,28 @@ func TestParsePermissionRulesAndHooks(t *testing.T) {
 		t.Fatalf("policy flags: %+v", cfg)
 	}
 }
+
+func TestParseSandbox(t *testing.T) {
+	base := map[string]string{
+		"OPENAI_API_KEY":       "sk",
+		"OPENAI_MODEL":         "m",
+		"EINO_AGENT_WORKSPACE": t.TempDir(),
+	}
+	cfg, err := Parse(nil, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Sandbox || cfg.SandboxAllowNetwork {
+		t.Fatalf("sandbox defaults: %+v", cfg)
+	}
+	cfg, err = Parse([]string{"--sandbox", "--sandbox-allow-network"}, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Sandbox || !cfg.SandboxAllowNetwork {
+		t.Fatalf("sandbox flags: %+v", cfg)
+	}
+	if _, err := Parse([]string{"--sandbox-allow-network"}, env(base)); err == nil {
+		t.Fatal("expected sandbox-allow-network without sandbox to fail")
+	}
+}

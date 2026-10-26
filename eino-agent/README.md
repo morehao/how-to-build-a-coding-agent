@@ -98,6 +98,8 @@ REPL 命令：
 | `--hooks` | 启用 tool hooks 的 JSON 文件 | 关闭 |
 | `--subagent-max-tokens` | 每个子 agent 的 token 预算，0 不额外限制 | `16000` |
 | `--subagent-max-tasks` | 一次 `tasks` 调用的最大并发数 | `4` |
+| `--sandbox` | 用 `sandbox-exec`/`bwrap` 包住 bash | 关闭 |
+| `--sandbox-allow-network` | sandbox 内允许网络 | 拒绝 |
 
 退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` SIGINT。
 
@@ -162,7 +164,9 @@ Skill 是仓库内容，不是系统指令：它不能覆盖审批/安全规则�
 
 `ask` 在非 TTY 下对写操作失败关闭，不会挂起。审批 payload 超过 256 KiB 直接拒绝，不截断后“同意”。`edit_file`/`apply_patch` 默认要求先读当前文件，且文件在读后不能被外部修改；`--no-read-before-edit` 可关闭。
 
-敏感文件（`.env`、`id_rsa`、`*.pem`、`credentials.json` 等）默认拒绝读写；`bash` 默认移除名字含 `API_KEY`/`TOKEN`/`SECRET`/`PASSWORD`/`AWS_*` 的环境变量。它们是默认值，不是 DLP：被批准的 bash 仍可读取文件。真正执行不可信代码时，请使用容器/独立用户。
+敏感文件（`.env`、`id_rsa`、`*.pem`、`credentials.json` 等）默认拒绝读写；`bash` 默认移除名字含 `API_KEY`/`TOKEN`/`SECRET`/`PASSWORD`/`AWS_*` 的环境变量。它们是默认值，不是 DLP：被批准的 bash 仍可读取文件。
+
+`--sandbox` 可以把 bash 放进 `sandbox-exec`（macOS）或 `bwrap`（Linux）：默认拒绝网络，写限制在 workspace 和临时目录。它仍允许读系统文件（工具链需要），也不替代容器；后端不可用时启动 fail-closed。详见 [`docs/sandbox.md`](docs/sandbox.md)。
 
 ## 回滚
 
