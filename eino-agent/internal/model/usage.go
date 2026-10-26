@@ -41,16 +41,18 @@ func (m *usageModel) Stream(ctx context.Context, input []*schema.Message, opts .
 	copies := sr.Copy(2)
 	go func() {
 		defer copies[0].Close()
-		var last *schema.Message
+		var usage *schema.TokenUsage
 		for {
 			chunk, recvErr := copies[0].Recv()
 			if recvErr != nil {
 				break
 			}
-			last = chunk
+			if chunk != nil && chunk.ResponseMeta != nil && chunk.ResponseMeta.Usage != nil {
+				usage = chunk.ResponseMeta.Usage
+			}
 		}
-		if last != nil && last.ResponseMeta != nil && last.ResponseMeta.Usage != nil {
-			m.counter.Observe(last.ResponseMeta.Usage.PromptTokens, input)
+		if usage != nil {
+			m.counter.Observe(usage.PromptTokens, input)
 		}
 	}()
 	return copies[1], nil

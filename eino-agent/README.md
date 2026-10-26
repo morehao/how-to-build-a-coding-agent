@@ -117,9 +117,10 @@ go run ./cmd/eino-agent --provider openai --model gpt-4o-mini --workspace .
    - 更旧的 tool 结果替换成 `[tool output omitted ...]` 占位符，旧的 tool call 参数也会压缩；
    - 仍然超预算时，按 user turn 从旧到新丢弃整块，保证 tool call / tool result 不被拆散；
    - 仍然超预算时，截断最大的消息，并标注 `[truncated to save context]`。
-2. **跨轮持久化**：`--history-bytes` 控制保存到 session 的历史总量，`session.Trim` 优先丢掉最旧的消息，并保证第一条是 user。
+2. **跨轮持久化**：`--history-bytes` 控制保存到 session 的历史总量，`session.Trim` 优先丢掉最旧的消息，并保证第一条是 user；
+3. **手动摘要**：`/compact` 调用模型生成结构化摘要，替换旧历史并保留最近两条消息；摘要写入 session 的可选 `summary` 字段，恢复后作为 background 注入。
 
-ReAct 分支的压缩是**确定性**的，不额外调用模型，因此没有摘要成本，也不会因为摘要失败而中断任务。token 数是保守估算（约 `bytes/3`），不是 provider 的精确 tokenizer；默认 32000 对多数模型是安全值，模型上下文更大时可以调高。
+ReAct 分支的**自动**压缩是确定性的，不额外调用模型，因此没有摘要成本，也不会因为摘要失败而中断任务；只有显式 `/compact` 才会产生一次摘要调用。token 数默认按 `bytes/3` 估算；每次模型响应带 `prompt_tokens` 时，`usageModel` 会用 provider 的 usage 校准估算比例，后续更接近实际值。默认 32000 对多数模型是安全值，模型上下文更大时可以调高。
 
 被省略/截断的内容会在 prompt 里提示模型：需要细节就带更小的 `limit` / `max_results` 重新调用工具。
 
@@ -220,7 +221,7 @@ go test ./...
 
 - 这是教学/演示向的简化实现，不是 Claude Code / Codex 的完整替代品；
 - 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引；
-- ReAct 分支只做确定性上下文压缩，不做 LLM 摘要；ADK 分支使用 ADK 的 summarization middleware；
+- ReAct 分支自动压缩是确定性的，只有 `/compact` 才调用模型做结构化摘要；ADK 分支使用 ADK 的 summarization middleware；
 - `bash` 超时依赖 `exec.CommandContext`，被杀的是 shell 进程本身，极端情况下子进程可能残留；
 - 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证。
 
