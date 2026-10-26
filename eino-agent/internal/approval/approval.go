@@ -211,6 +211,8 @@ func printRequest(out io.Writer, kind Kind, req Request) bool {
 			fmt.Fprintf(out, "  change: %s\n", sanitize(req.Summary))
 		}
 		if req.Diff != "" {
+			added, removed := diffStat(req.Diff)
+			fmt.Fprintf(out, "  diff: +%d -%d\n", added, removed)
 			fmt.Fprintf(out, "%s\n", sanitize(req.Diff))
 		}
 	default:
@@ -218,6 +220,20 @@ func printRequest(out io.Writer, kind Kind, req Request) bool {
 			sanitize(req.Command), sanitize(req.CWD), req.Timeout)
 	}
 	return true
+}
+
+func diffStat(diff string) (added, removed int) {
+	for _, line := range strings.Split(diff, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added++
+		case strings.HasPrefix(line, "-"):
+			removed++
+		}
+	}
+	return added, removed
 }
 
 func requestKey(kind Kind, req Request) string {
