@@ -7,6 +7,8 @@ import (
 	"os"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/policy"
 )
 
 type readFileInput struct {
@@ -29,6 +31,9 @@ func (o *Options) readFile(_ context.Context, in readFileInput) (string, error) 
 	}
 	if !info.Mode().IsRegular() {
 		return "", fmt.Errorf("%s is not a regular file", o.Workspace.Rel(path))
+	}
+	if rel := o.Workspace.Rel(path); !o.AllowSensitive && policy.IsSensitive(rel) {
+		return "", fmt.Errorf("refusing to read sensitive file %s; pass --allow-sensitive to override", rel)
 	}
 
 	limit := in.Limit
@@ -90,6 +95,9 @@ func (o *Options) readFile(_ context.Context, in readFileInput) (string, error) 
 	}
 	if written == 0 {
 		return fmt.Sprintf("No content in %s at offset %d (file has %d lines)", o.Workspace.Rel(path), offset, lineNo), nil
+	}
+	if o.Files != nil {
+		_ = o.Files.MarkRead(path)
 	}
 	header := fmt.Sprintf("%s (lines %d-%d):\n", o.Workspace.Rel(path), offset, offset+written-1)
 	result := header + out.String()

@@ -74,3 +74,21 @@ go run edit_tool.go --verbose
 - Requires ANTHROPIC_API_KEY environment variable to be set
 - Chat application provides a simple terminal interface to Claude
 - Use ctrl-c to quit the chat session
+
+## Eino Agent Module
+
+The repository also contains an independent Go module at `eino-agent/` (ReAct and ADK branches). It is not part of the root `go test ./...` run.
+
+```bash
+cd eino-agent
+go build ./...
+go vet ./...
+go test ./...
+go test ./internal/agent -run TestEvalScenarios -v
+go test -race ./...
+```
+
+- `--provider fake --script testdata/scenarios/*.json` runs deterministically without an API key.
+- `--trace <file>` writes JSONL events; `internal/eval` consumes the same events.
+- Read `eino-agent/README.md` and `eino-agent/docs/README.md` before changing the agent loop or trace schema.
+- Do not commit `.eino-agent/` (checkpoints/plan/trace) or session files.

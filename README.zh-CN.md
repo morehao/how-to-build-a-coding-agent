@@ -305,6 +305,39 @@ hello          # 问候脚本
 
 ---
 
+
+---
+
+## 🧪 进阶路线：Eino Agent 模块
+
+上面的工作坊示例刻意保持很小。如果你想看一个更完整、可运行的 agent，请阅读独立 Go module [`eino-agent/`](eino-agent/README.md)：
+
+| 分支 | 运行时 | 学习重点 |
+| --- | --- | --- |
+| `feat/eino-code-agent` | Eino `flow/agent/react` | 最小完整 ReAct 循环、流式、工具错误 |
+| `feat/eino-code-agent-adk` | Eino ADK `ChatModelAgent` + `Runner` | middleware、checkpoint、interrupt/resume |
+
+它补齐了 demo 之外真正难的部分：
+
+- 工作区边界、审批模式、stdin 单所有者；
+- 读后写、`apply_patch`、文件 checkpoint 与 `/undo`；
+- `repo_map` + `.einoignore`；
+- 重试/退避和 session 级 token 预算；
+- 敏感文件与环境变量策略；
+- JSONL trace、确定性 fake provider、eval 场景；
+- stdio MCP 工具和只读 `task` 子 agent。
+
+```bash
+cd eino-agent
+go test ./...                       # 不需要 API key
+go test ./internal/agent -run TestEvalScenarios -v
+go build -o eino-agent ./cmd/eino-agent
+./eino-agent --provider fake \
+  --script testdata/scenarios/read_edit.json --workspace /tmp/eino-demo --no-stream
+```
+
+从 [`eino-agent/docs/README.md`](eino-agent/docs/README.md) 开始：它按“ReAct 循环 → 工具边界 → 上下文 → trace/eval → 失败画廊”组织。
+
 ## 🚀 下一步做什么？
 
 完成工作坊后，可以尝试构建：

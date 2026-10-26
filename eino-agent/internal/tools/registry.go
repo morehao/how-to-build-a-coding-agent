@@ -14,7 +14,9 @@ import (
 	"github.com/cloudwego/eino/components/tool/utils"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/approval"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/checkpoint"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/filestate"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
@@ -27,6 +29,13 @@ type Options struct {
 	MaxOutputBytes int
 	BashTimeout    time.Duration
 	RGPath         string
+
+	// v2 capabilities.
+	Checkpoints           *checkpoint.Manager
+	Files                 *filestate.State
+	EnforceReadBeforeEdit bool
+	AllowSensitive        bool
+	AllowEnv              bool
 }
 
 // New builds the tool list. The returned tools are safe to share across turns;
@@ -77,6 +86,24 @@ func New(ctx context.Context, opts Options) ([]tool.BaseTool, error) {
 		return nil, fmt.Errorf("register edit_file: %w", err)
 	}
 
+	patchTool, err := utils.InferTool(
+		"apply_patch",
+		"Apply a unified diff across one or more files. Include ---/+++ headers and @@ hunks. Prefer this over edit_file for multi-file or multi-hunk changes.",
+		wrapTool(&opts, opts.applyPatch),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("register apply_patch: %w", err)
+	}
+
+	repoMapTool, err := utils.InferTool(
+		"repo_map",
+		"Return a compact directory/file/Go-symbol map of the repository. Honors .einoignore; use it instead of dumping large trees.",
+		wrapTool(&opts, opts.repoMap),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("register repo_map: %w", err)
+	}
+
 	bashTool, err := utils.InferTool(
 		"bash",
 		"Run a shell command in the workspace root with bash -c. Requires user approval unless permission mode is yolo. Use for builds, tests and git inspection.",
@@ -104,7 +131,7 @@ func New(ctx context.Context, opts Options) ([]tool.BaseTool, error) {
 		return nil, fmt.Errorf("register code_search: %w", err)
 	}
 
-	return []tool.BaseTool{readTool, listTool, editTool, bashTool, searchTool, planTool}, nil
+	return []tool.BaseTool{readTool, listTool, editTool, patchTool, repoMapTool, bashTool, searchTool, planTool}, nil
 }
 
 // wrapTool turns operational errors into tool output ("ERROR: ...") so the
@@ -118,7 +145,7 @@ func wrapTool[T any](o *Options, fn func(context.Context, T) (string, error)) fu
 			if ctx.Err() != nil {
 				return "", ctx.Err()
 			}
-			return "ERROR: " + err.Error(), nil
+			return o.capOutput("ERROR: " + err.Error()), nil
 		}
 		return o.capOutput(out), nil
 	}

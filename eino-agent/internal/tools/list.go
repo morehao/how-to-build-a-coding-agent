@@ -7,8 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
 type listFilesInput struct {
@@ -59,7 +57,7 @@ func (o *Options) listFiles(_ context.Context, in listFilesInput) (string, error
 			return relErr
 		}
 		fullRel := o.Workspace.Rel(path)
-		if workspace.IsIgnoredRel(fullRel) {
+		if o.Workspace.Ignored(fullRel) {
 			if d.IsDir() {
 				return fs.SkipDir
 			}

@@ -87,3 +87,21 @@ go run edit_tool.go --verbose
 - 需要设置 `ANTHROPIC_API_KEY` 环境变量
 - 聊天应用提供与 Claude 交互的简单终端界面
 - 使用 ctrl-c 退出聊天会话
+
+## Eino Agent 模块
+
+仓库还包含独立 Go module `eino-agent/`（ReAct 与 ADK 分支），不在根目录 `go test ./...` 范围内。
+
+```bash
+cd eino-agent
+go build ./...
+go vet ./...
+go test ./...
+go test ./internal/agent -run TestEvalScenarios -v
+go test -race ./...
+```
+
+- `--provider fake --script testdata/scenarios/*.json` 无需 API key 即可确定性运行。
+- `--trace <file>` 写 JSONL 事件；`internal/eval` 读取同一套事件。
+- 改 agent 循环或 trace schema 前先读 `eino-agent/README.md` 和 `eino-agent/docs/README.md`。
+- 不要提交 `.eino-agent/`（checkpoint/plan/trace）或 session 文件。

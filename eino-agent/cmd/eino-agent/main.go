@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -17,13 +16,21 @@ import (
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/agent"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/approval"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/budget"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/checkpoint"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/filestate"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/input"
+	mcpbridge "github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/mcp"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/memory"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/model"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/retry"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/subagent"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/summary"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/tools"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/trace"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
@@ -54,31 +61,91 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		return 2
 	}
 
-	u := ui.New(stdout, stderr, isTTY && os.Getenv("NO_COLOR") == "", cfg.Verbose)
-	approver := approval.New(cfg.PermissionMode, stdin, stdout, isTTY)
+	color := isTTY && writerIsTerminal(stdout) && os.Getenv("NO_COLOR") == ""
+	u := ui.New(stdout, stderr, color, cfg.Verbose)
+	rec, err := trace.Open(cfg.Trace)
+	if err != nil {
+		u.Error("error: %v", err)
+		return 1
+	}
+	defer rec.Close()
+
+	lines := input.New(stdin)
+	defer lines.Close()
+	approver := approval.NewWithSource(cfg.PermissionMode, lines, stdout, isTTY)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var checkpoints *checkpoint.Manager
+	if !cfg.NoCheckpoints {
+		checkpoints, err = checkpoint.New(ws, "")
+		if err != nil {
+			u.Error("error: %v", err)
+			return 1
+		}
+	}
+	files := filestate.New()
 	toolList, err := tools.New(ctx, tools.Options{
-		Workspace:      ws,
-		Approver:       approver,
-		Mode:           cfg.PermissionMode,
-		MaxOutputBytes: 256 * 1024,
-		BashTimeout:    120 * time.Second,
+		Workspace:             ws,
+		Approver:              approver,
+		Mode:                  cfg.PermissionMode,
+		MaxOutputBytes:        256 * 1024,
+		BashTimeout:           120 * time.Second,
+		Checkpoints:           checkpoints,
+		Files:                 files,
+		EnforceReadBeforeEdit: !cfg.NoReadBeforeEdit,
+		AllowSensitive:        cfg.AllowSensitive,
+		AllowEnv:              cfg.AllowEnv,
 	})
 	if err != nil {
 		u.Error("error: %v", err)
 		return 1
 	}
+	if cfg.MCPConfig != "" {
+		mcpCfg, err := mcpbridge.Load(cfg.MCPConfig)
+		if err != nil {
+			u.Error("error: %v", err)
+			return 1
+		}
+		mcpTools, cleanup, err := mcpbridge.Start(ctx, mcpCfg, approver, cfg.PermissionMode)
+		if err != nil {
+			u.Error("error: %v", err)
+			return 1
+		}
+		defer func() { _ = cleanup() }()
+		toolList = append(toolList, mcpTools...)
+		u.Verbosef("MCP: %d tool(s) from %d server(s)", len(mcpTools), len(mcpCfg.Servers))
+	}
 
 	counter := contextmgr.NewCounter()
+	tracker := budget.New(cfg.MaxTotalTokens)
 	chatModel, err := model.New(ctx, cfg)
 	if err != nil {
 		u.Error("error: %v", err)
 		return 2
 	}
-	chatModel = model.NewUsageModel(chatModel, counter)
+	chatModel = model.NewRetryModel(chatModel, retry.Config{
+		MaxAttempts: cfg.MaxRetries + 1,
+		BaseDelay:   time.Duration(cfg.RetryBaseMS) * time.Millisecond,
+		MaxDelay:    8 * time.Second,
+		Jitter:      0.2,
+	})
+	chatModel = model.NewUsageModel(chatModel, counter, tracker)
+
+	subRunner, err := subagent.NewReActRunner(ctx, subagent.Config{
+		Workspace: ws,
+		Model:     chatModel,
+		Trace:     rec,
+		MaxSteps:  6,
+	})
+	if err != nil {
+		u.Warn("warning: task tool disabled: %v", err)
+	} else if taskTool, taskErr := subagent.NewTaskTool(subRunner); taskErr != nil {
+		u.Warn("warning: task tool disabled: %v", taskErr)
+	} else {
+		toolList = append(toolList, taskTool)
+	}
 
 	systemPrompt, err := agent.BuildSystemPrompt(ws, cfg.PermissionMode)
 	if err != nil {
@@ -102,6 +169,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		Counter:       counter,
 		Stream:        !cfg.NoStream,
 		UI:            u,
+		Trace:         rec,
 	})
 	if err != nil {
 		u.Error("error: %v", err)
@@ -113,7 +181,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	}
 
 	printBanner(u, cfg, ws, sess)
-	return runREPL(ctx, stdin, stdout, sess, persist, cfg, ws, chatModel, counter, runner, u)
+	return runREPL(ctx, lines, stdout, sess, persist, cfg, ws, chatModel, counter, runner, realDeps(checkpoints, files, tracker), u)
 }
 
 func loadOrCreateSession(cfg *config.Config, ws *workspace.Workspace, u *ui.UI) (*session.Session, error) {
@@ -158,71 +226,72 @@ func runOnce(ctx context.Context, prompt string, sess *session.Session, persist 
 }
 
 type replDeps struct {
-	sess    *session.Session
-	cfg     *config.Config
-	ws      *workspace.Workspace
-	model   einomodel.BaseModel[*schema.Message]
-	counter *contextmgr.Counter
-	u       *ui.UI
+	sess        *session.Session
+	cfg         *config.Config
+	ws          *workspace.Workspace
+	model       einomodel.BaseModel[*schema.Message]
+	counter     *contextmgr.Counter
+	u           *ui.UI
+	checkpoints *checkpoint.Manager
+	files       *filestate.State
+	budget      *budget.Tracker
 }
 
-func runREPL(ctx context.Context, stdin io.Reader, stdout io.Writer, sess *session.Session, persist bool, cfg *config.Config, ws *workspace.Workspace, chatModel einomodel.BaseModel[*schema.Message], counter *contextmgr.Counter, runner *agent.Agent, u *ui.UI) int {
-	deps := &replDeps{sess: sess, cfg: cfg, ws: ws, model: chatModel, counter: counter, u: u}
-	scanner := bufio.NewScanner(stdin)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+func realDeps(checkpoints *checkpoint.Manager, files *filestate.State, tracker *budget.Tracker) *replDeps {
+	return &replDeps{checkpoints: checkpoints, files: files, budget: tracker}
+}
 
-	lines := make(chan string)
-	scanErr := make(chan error, 1)
-	go func() {
-		for scanner.Scan() {
-			lines <- scanner.Text()
-		}
-		scanErr <- scanner.Err()
-	}()
+func runREPL(ctx context.Context, lines *input.Source, stdout io.Writer, sess *session.Session, persist bool, cfg *config.Config, ws *workspace.Workspace, chatModel einomodel.BaseModel[*schema.Message], counter *contextmgr.Counter, runner *agent.Agent, extra *replDeps, u *ui.UI) int {
+	deps := &replDeps{sess: sess, cfg: cfg, ws: ws, model: chatModel, counter: counter, u: u}
+	if extra != nil {
+		deps.checkpoints = extra.checkpoints
+		deps.files = extra.files
+		deps.budget = extra.budget
+	}
 
 	for {
 		u.Prompt()
-		select {
-		case <-ctx.Done():
-			fmt.Fprintln(stdout)
-			return 130
-		case err := <-scanErr:
-			if err != nil {
-				u.Error("input error: %v", err)
-				return 1
+		line, readErr := lines.ReadLine(ctx)
+		if readErr != nil {
+			if ctx.Err() != nil {
+				fmt.Fprintln(stdout)
+				return 130
 			}
-			fmt.Fprintln(stdout)
-			return 0
-		case line := <-lines:
-			input := strings.TrimSpace(line)
-			if input == "" {
-				continue
+			if errors.Is(readErr, io.EOF) {
+				fmt.Fprintln(stdout)
+				return 0
 			}
-			if handled, code := handleSlashCommand(ctx, input, deps); handled {
-				if code >= 0 {
-					return code
-				}
-				continue
+			u.Error("input error: %v", readErr)
+			return 1
+		}
+		input := strings.TrimSpace(line)
+		if input == "" {
+			continue
+		}
+		if handled, code := handleSlashCommand(ctx, input, deps); handled {
+			if code >= 0 {
+				return code
 			}
+			continue
+		}
 
-			history := append(historyFor(sess, ws), schema.UserMessage(input))
-			final, err := runner.RunTurn(ctx, history)
-			if err != nil {
-				if ctx.Err() != nil {
-					return 130
-				}
-				u.Error("error: %v", err)
-				continue
+		history := append(historyFor(sess, ws), schema.UserMessage(input))
+		final, err := runner.RunTurn(ctx, history)
+		if err != nil {
+			if ctx.Err() != nil {
+				return 130
 			}
-			_ = sess.Add("user", input)
-			_ = sess.Add("assistant", final.Content)
-			if dropped := sess.Trim(cfg.HistoryBytes); dropped > 0 {
-				u.Verbosef("dropped %d old messages to stay under %d bytes", dropped, cfg.HistoryBytes)
-			}
-			if persist {
-				if _, err := sess.Save(); err != nil {
-					u.Warn("warning: could not save session: %v", err)
-				}
+			u.Error("error: %v", err)
+			continue
+		}
+		_ = sess.Add("user", input)
+		_ = sess.Add("assistant", final.Content)
+		if dropped := sess.Trim(cfg.HistoryBytes); dropped > 0 {
+			u.Verbosef("dropped %d old messages to stay under %d bytes", dropped, cfg.HistoryBytes)
+		}
+		if persist {
+			if _, err := sess.Save(); err != nil {
+				u.Warn("warning: could not save session: %v", err)
 			}
 		}
 	}
@@ -235,7 +304,7 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 	case "/exit", "/quit":
 		return true, 0
 	case "/help":
-		d.u.Info("commands: /help  /clear  /compact  /plan  /session  /exit")
+		d.u.Info("commands: /help  /clear  /compact  /plan  /session  /stats  /undo  /checkpoints  /exit")
 		return true, -1
 	case "/clear":
 		d.sess.Clear()
@@ -259,6 +328,50 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 		return true, -1
 	case "/session":
 		d.u.Info("session: %s\nfile: %s", d.sess.ID, d.sess.Path())
+		return true, -1
+	case "/stats":
+		prompt, completion, total := d.budget.Stats()
+		max := d.budget.Max()
+		limit := "unlimited"
+		if max > 0 {
+			limit = fmt.Sprintf("%d", max)
+		}
+		d.u.Info("tokens: prompt=%d completion=%d total=%d (max %s)\ncontext calibration: %.2f\nsession: %d bytes",
+			prompt, completion, total, limit, d.counter.Ratio(), d.sess.Bytes())
+		return true, -1
+	case "/undo":
+		if d.checkpoints == nil {
+			d.u.Warn("checkpoints are disabled; start without --no-checkpoints")
+			return true, -1
+		}
+		restored, err := d.checkpoints.UndoLast()
+		if err != nil {
+			d.u.Error("undo: %v", err)
+		} else {
+			d.u.Info("restored %d file(s): %s", len(restored), strings.Join(restored, ", "))
+		}
+		return true, -1
+	case "/checkpoints":
+		if d.checkpoints == nil {
+			d.u.Warn("checkpoints are disabled")
+			return true, -1
+		}
+		entries, err := d.checkpoints.List()
+		if err != nil {
+			d.u.Error("checkpoints: %v", err)
+			return true, -1
+		}
+		if len(entries) == 0 {
+			d.u.Info("no checkpoints")
+			return true, -1
+		}
+		for i, e := range entries {
+			if i >= 10 {
+				d.u.Info("... and %d older checkpoint(s)", len(entries)-10)
+				break
+			}
+			d.u.Info("%s  %s  %d file(s)", e.ID, e.Label, len(e.Files))
+		}
 		return true, -1
 	default:
 		if strings.HasPrefix(input, "/") {
@@ -299,9 +412,22 @@ func printBanner(u *ui.UI, cfg *config.Config, ws *workspace.Workspace, sess *se
 		fmt.Sprintf("provider: %s · model: %s", cfg.Provider, cfg.Model),
 		fmt.Sprintf("workspace: %s", ws.Root()),
 		fmt.Sprintf("permissions: %s · streaming: %t", cfg.PermissionMode, !cfg.NoStream),
+		fmt.Sprintf("trace: %s", traceLabel(cfg.Trace)),
 		fmt.Sprintf("session: %s", sess.ID),
 		"Type /help for commands, /exit to quit.",
 	)
+}
+
+func traceLabel(path string) string {
+	if path == "" {
+		return "disabled (pass --trace <file>)"
+	}
+	return path
+}
+
+func writerIsTerminal(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && isTerminal(f)
 }
 
 func isTerminal(f *os.File) bool {

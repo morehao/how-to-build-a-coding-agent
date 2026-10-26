@@ -1,0 +1,30 @@
+{
+  "name": "apply_patch_multi_hunk",
+  "files": {
+    "a.txt": "one\ntwo\n"
+  },
+  "script": {
+    "name": "patch",
+    "steps": [
+      {
+        "tool_calls": [
+          {
+            "name": "apply_patch",
+            "arguments": "{\"patch\":\"--- a/a.txt\\n+++ b/a.txt\\n@@ -1,2 +1,2 @@\\n one\\n-two\\n+TWO\\n\"}"
+          }
+        ]
+      },
+      {
+        "content": "patched"
+      }
+    ]
+  },
+  "input": "change two to TWO",
+  "expect": {
+    "final_contains": ["patched"],
+    "tools": ["apply_patch"],
+    "files": {
+      "a.txt": "one\nTWO\n"
+    }
+  }
+}

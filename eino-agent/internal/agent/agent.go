@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/callbacks"
 	"github.com/cloudwego/eino/components/model"
@@ -18,6 +19,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/trace"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 )
 
@@ -31,6 +33,7 @@ type Config struct {
 	Counter       *contextmgr.Counter
 	Stream        bool
 	UI            *ui.UI
+	Trace         *trace.Recorder
 }
 
 // Agent is a thin wrapper around Eino's ReAct agent.
@@ -39,6 +42,8 @@ type Agent struct {
 	callbacks callbacks.Handler
 	ui        *ui.UI
 	stream    bool
+	trace     *trace.Recorder
+	turn      int
 }
 
 // New constructs the ReAct graph. Tools are executed sequentially so approval
@@ -85,22 +90,40 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 
 	return &Agent{
 		runner:    runner,
-		callbacks: NewCallbacks(cfg.UI),
+		callbacks: NewCallbacks(cfg.UI, cfg.Trace),
 		ui:        cfg.UI,
 		stream:    cfg.Stream,
+		trace:     cfg.Trace,
 	}, nil
 }
 
 // RunTurn executes one user turn over the supplied history and returns the
 // final assistant message. Intermediate ReAct messages stay inside the graph.
-func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (*schema.Message, error) {
+func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (final *schema.Message, err error) {
+	a.turn++
+	turn := a.turn
+	start := time.Now()
+	input := lastUserContent(history)
+	a.trace.TurnStart(turn, input)
+	defer func() {
+		var content string
+		var usage *schema.TokenUsage
+		if final != nil {
+			content = final.Content
+			if final.ResponseMeta != nil {
+				usage = final.ResponseMeta.Usage
+			}
+		}
+		a.trace.TurnEnd(turn, content, usage, err, time.Since(start))
+	}()
+
 	opts := []flowagent.AgentOption{
 		flowagent.WithComposeOptions(compose.WithCallbacks(a.callbacks)),
 	}
 	if !a.stream {
-		msg, err := a.runner.Generate(ctx, history, opts...)
-		if err != nil {
-			return nil, fmt.Errorf("model generate: %w", err)
+		msg, genErr := a.runner.Generate(ctx, history, opts...)
+		if genErr != nil {
+			return nil, fmt.Errorf("model generate: %w", genErr)
 		}
 		if msg == nil {
 			return nil, errors.New("model returned no message")
@@ -115,9 +138,9 @@ func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (*schema
 		return msg, nil
 	}
 
-	sr, err := a.runner.Stream(ctx, history, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("model stream: %w", err)
+	sr, streamErr := a.runner.Stream(ctx, history, opts...)
+	if streamErr != nil {
+		return nil, fmt.Errorf("model stream: %w", streamErr)
 	}
 	defer sr.Close()
 
@@ -157,11 +180,20 @@ func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (*schema
 		}
 	}
 
-	final := schema.AssistantMessage(content.String(), nil)
+	final = schema.AssistantMessage(content.String(), nil)
 	if usage != nil {
 		final.ResponseMeta = &schema.ResponseMeta{Usage: usage}
 	}
 	return final, nil
+}
+
+func lastUserContent(history []*schema.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i] != nil && history[i].Role == schema.User {
+			return history[i].Content
+		}
+	}
+	return ""
 }
 
 // allChunksToolCallChecker is required for providers (notably Claude) that may
