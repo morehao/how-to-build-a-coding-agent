@@ -25,6 +25,7 @@ import (
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/filestate"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/hooks"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/input"
 	mcpbridge "github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/mcp"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/memory"
@@ -71,6 +72,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	lines := input.New(stdin)
 	defer lines.Close()
 	approver := approval.NewWithSource(cfg.PermissionMode, lines, stdout, isTTY)
+	if !cfg.NoPermissionRules {
+		rulesPath := cfg.PermissionRules
+		if !filepath.IsAbs(rulesPath) {
+			rulesPath = filepath.Join(ws.Root(), rulesPath)
+		}
+		rules, rulesErr := approval.LoadRules(rulesPath)
+		if rulesErr != nil {
+			u.Error("permission rules: %v", rulesErr)
+			return 1
+		}
+		if rules != nil {
+			approver.SetRules(rules)
+			u.Verbosef("permission rules: %d allow, %d deny", len(rules.Allow), len(rules.Deny))
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -154,6 +170,21 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		defer func() { _ = cleanup() }()
 		toolList = append(toolList, mcpTools...)
 		u.Verbosef("MCP: %d tool(s) from %d server(s)", len(mcpTools), len(mcpCfg.Servers))
+	}
+	if cfg.HooksPath != "" {
+		hooksPath := cfg.HooksPath
+		if !filepath.IsAbs(hooksPath) {
+			hooksPath = filepath.Join(ws.Root(), hooksPath)
+		}
+		hookSet, hookErr := hooks.Load(ws, hooksPath)
+		if hookErr != nil {
+			u.Error("hooks: %v", hookErr)
+			return 1
+		}
+		if hookSet != nil {
+			toolList = hookSet.Wrap(ctx, toolList)
+			u.Verbosef("hooks: %d before, %d after", len(hookSet.Before), len(hookSet.After))
+		}
 	}
 
 	var rec *trace.Recorder
