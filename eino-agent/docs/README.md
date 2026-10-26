@@ -16,9 +16,10 @@
 | 4 | [04-trace-and-eval.md](04-trace-and-eval.md) | 如何写一个确定性 eval？trace 字段怎么读？ |
 | 5 | [05-capabilities.md](05-capabilities.md) | v2 的每个能力解决什么问题、边界在哪？ |
 | 6 | [skills.md](skills.md) | `SKILL.md` 如何做渐进式披露？inline/fork 的边界是什么？ |
-| 7 | [06-react-vs-adk.md](06-react-vs-adk.md) | 两个分支共享什么、差异在哪、何时用哪个？ |
-| 8 | [07-failure-gallery.md](07-failure-gallery.md) | 常见失败模式的症状、根因、修复和回归测试。 |
-| 9 | [mcp.md](mcp.md) | 如何接入一个 stdio MCP server，为什么每次调用还要审批？ |
+| 7 | [permissions-and-hooks.md](permissions-and-hooks.md) | allow/deny 规则与 tool hooks 如何分层？谁能绕过审批？ |
+| 8 | [06-react-vs-adk.md](06-react-vs-adk.md) | 两个分支共享什么、差异在哪、何时用哪个？ |
+| 9 | [07-failure-gallery.md](07-failure-gallery.md) | 常见失败模式的症状、根因、修复和回归测试。 |
+| 10 | [mcp.md](mcp.md) | 如何接入一个 stdio MCP server，为什么每次调用还要审批？ |
 
 ## 先跑起来
 

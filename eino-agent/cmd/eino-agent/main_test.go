@@ -252,3 +252,82 @@ func TestSlashSessionsAndResume(t *testing.T) {
 		t.Fatalf("resume handled=%v code=%d session=%q out=%q", handled, code, d.sess.ID, out.String())
 	}
 }
+
+func TestPermissionRulesAllowNonInteractiveBash(t *testing.T) {
+	dir := t.TempDir()
+	rulesDir := filepath.Join(dir, ".eino-agent")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rulesDir, "permissions.json"), []byte(`{
+  "allow": [{"tool":"bash","command":"echo allowed"}]
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(dir, "script.json")
+	script := `{
+  "name": "rules-smoke",
+  "steps": [
+    {"tool_calls": [{"name": "bash", "arguments": "{\"command\":\"echo allowed\"}"}]},
+    {"content": "done"}
+  ]
+}`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(dir, "trace.jsonl")
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"--provider", "fake", "--script", scriptPath,
+		"--workspace", dir, "--session-dir", filepath.Join(dir, "sessions"),
+		"--no-stream", "--trace", tracePath, "--prompt", "run the allowed command",
+	}, strings.NewReader(""), &out, &errOut, false)
+	if code != 0 {
+		t.Fatalf("code=%d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errOut.String())
+	}
+	data, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "allowed") || strings.Contains(string(data), "non-interactive session") {
+		t.Fatalf("rule was not applied:\n%s", string(data))
+	}
+}
+
+func TestHooksRunAroundToolCalls(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hello.txt"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hooksPath := filepath.Join(dir, "hooks.json")
+	if err := os.WriteFile(hooksPath, []byte(`{
+  "before_tool": [{"command": "printf before >> hook.log", "tools": ["read_file"]}],
+  "after_tool": [{"command": "printf after >> hook.log", "tools": ["read_file"]}]
+}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(dir, "script.json")
+	script := `{
+  "name": "hooks-smoke",
+  "steps": [
+    {"tool_calls": [{"name": "read_file", "arguments": "{\"path\":\"hello.txt\"}"}]},
+    {"content": "done"}
+  ]
+}`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"--provider", "fake", "--script", scriptPath,
+		"--workspace", dir, "--session-dir", filepath.Join(dir, "sessions"),
+		"--no-stream", "--hooks", hooksPath, "--prompt", "read hello",
+	}, strings.NewReader(""), &out, &errOut, false)
+	if code != 0 {
+		t.Fatalf("code=%d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errOut.String())
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "hook.log"))
+	if err != nil || string(data) != "beforeafter" {
+		t.Fatalf("hook.log=%q err=%v", string(data), err)
+	}
+}
