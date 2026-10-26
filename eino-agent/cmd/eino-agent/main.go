@@ -449,7 +449,7 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 	case "/exit", "/quit":
 		return true, 0
 	case "/help":
-		d.u.Info("commands: /help  /clear  /compact  /plan  /recall <query>  /session  /sessions  /resume <id>  /stats  /undo  /checkpoints  /exit")
+		d.u.Info("commands: /help  /clear  /compact  /plan  /recall <query>  /session  /sessions  /resume <id>  /stats  /trace  /undo  /checkpoints  /exit")
 		return true, -1
 	case "/clear":
 		d.sess.Clear()
@@ -499,6 +499,18 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 			}
 			d.u.Info("%s %s  %s  %d msg  %s", marker, info.ID, info.UpdatedAt.Format("2006-01-02 15:04"), info.Messages, info.Workspace)
 		}
+		return true, -1
+	case "/trace":
+		if d.cfg.Trace == "" {
+			d.u.Info("trace is disabled; pass --trace <file>")
+			return true, -1
+		}
+		stats, err := trace.SummarizeFile(d.cfg.Trace)
+		if err != nil {
+			d.u.Error("trace: %v", err)
+			return true, -1
+		}
+		d.u.Info("%s", stats.String())
 		return true, -1
 	case "/stats":
 		prompt, completion, total := d.budget.Stats()

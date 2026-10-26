@@ -96,7 +96,7 @@ REPL 命令：
 
 退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` SIGINT。
 
-REPL 中 Ctrl-C 取消当前 turn 并回到提示符，不写入未完成的历史；空闲时 Ctrl-C 退出。`/sessions` 列出 session，`/resume <id>` 切换；`--resume` 也支持启动时加载。session 只保存最终 user/assistant，不重放 tool 中间态或 Eino 图状态。
+REPL 中 Ctrl-C 取消当前 turn 并回到提示符，不写入未完成的历史；空闲时 Ctrl-C 退出。`/sessions` 列出 session，`/resume <id>` 切换；`--resume` 也支持启动时加载。session 只保存最终 user/assistant，不重放 tool 中间态或 Eino 图状态。`/trace` 聚合当前 `--trace` 文件里的 turn/model/tool 次数、token 和错误。
 
 `--provider auto` 只在 `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `ARK_API_KEY` 恰好一个存在时自动选择；多个同时存在必须显式传 `--provider`。
 

@@ -356,3 +356,24 @@ func TestSlashRecall(t *testing.T) {
 		t.Fatalf("handled=%v code=%d out=%q", handled, code, out.String())
 	}
 }
+
+func TestSlashTraceSummary(t *testing.T) {
+	dir := t.TempDir()
+	tracePath := filepath.Join(dir, "trace.jsonl")
+	raw := `{"ts":"2026-01-01T00:00:00Z","type":"turn_start"}
+{"ts":"2026-01-01T00:00:01Z","type":"model_end","duration_ms":10,"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}
+{"ts":"2026-01-01T00:00:02Z","type":"turn_end","usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}
+`
+	if err := os.WriteFile(tracePath, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	d := &replDeps{
+		cfg: &config.Config{Trace: tracePath},
+		u:   ui.New(&out, &errOut, false, false),
+	}
+	handled, code := handleSlashCommand(context.Background(), "/trace", d)
+	if !handled || code != -1 || !strings.Contains(out.String(), "tokens=10") {
+		t.Fatalf("handled=%v code=%d out=%q", handled, code, out.String())
+	}
+}
