@@ -30,6 +30,7 @@ import (
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/memory"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/model"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/retry"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/sandbox"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/skill"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/subagent"
@@ -77,6 +78,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 
 	lines := input.New(stdin)
 	defer lines.Close()
+	var sandboxRunner *sandbox.Runner
+	if cfg.Sandbox {
+		sandboxRunner, err = sandbox.New(ws.Root(), cfg.SandboxAllowNetwork)
+		if err != nil {
+			u.Error("sandbox: %v", err)
+			return 2
+		}
+		u.Verbosef("sandbox: %s (network=%t)", sandboxRunner.Name(), cfg.SandboxAllowNetwork)
+	}
 	approver := approval.NewWithSource(cfg.PermissionMode, lines, stdout, isTTY)
 	if !cfg.NoPermissionRules {
 		rulesPath := cfg.PermissionRules
@@ -129,6 +139,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		EnforceReadBeforeEdit: !cfg.NoReadBeforeEdit,
 		AllowSensitive:        cfg.AllowSensitive,
 		AllowEnv:              cfg.AllowEnv,
+		Sandbox:               sandboxRunner,
 	})
 	if err != nil {
 		u.Error("error: %v", err)

@@ -58,7 +58,7 @@ func (o *Options) bash(ctx context.Context, in bashInput) (string, error) {
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(runCtx, "bash", "-c", command)
+	cmd := o.Sandbox.Wrap(runCtx, command)
 	cmd.WaitDelay = 2 * time.Second
 	configureProcess(cmd)
 	cmd.Cancel = func() error {

@@ -17,6 +17,7 @@ import (
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/checkpoint"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/filestate"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/sandbox"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
@@ -36,6 +37,8 @@ type Options struct {
 	EnforceReadBeforeEdit bool
 	AllowSensitive        bool
 	AllowEnv              bool
+	// Sandbox optionally wraps bash in an OS-level sandbox. Nil means plain bash.
+	Sandbox *sandbox.Runner
 }
 
 // New builds the tool list. The returned tools are safe to share across turns;

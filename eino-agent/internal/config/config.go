@@ -53,24 +53,26 @@ type Config struct {
 	ShowVersion    bool
 
 	// New in v2.
-	Script            string
-	Trace             string
-	NoCheckpoints     bool
-	NoReadBeforeEdit  bool
-	PermissionRules   string
-	NoPermissionRules bool
-	HooksPath         string
-	SubagentMaxTokens int
-	SubagentMaxTasks  int
-	AllowSensitive    bool
-	AllowEnv          bool
-	MaxRetries        int
-	RetryBaseMS       int
-	MaxTotalTokens    int
-	MaxTokens         int
-	MCPConfig         string
-	SkillsDir         string
-	NoSkills          bool
+	Script              string
+	Trace               string
+	NoCheckpoints       bool
+	NoReadBeforeEdit    bool
+	PermissionRules     string
+	NoPermissionRules   bool
+	HooksPath           string
+	SubagentMaxTokens   int
+	SubagentMaxTasks    int
+	Sandbox             bool
+	SandboxAllowNetwork bool
+	AllowSensitive      bool
+	AllowEnv            bool
+	MaxRetries          int
+	RetryBaseMS         int
+	MaxTotalTokens      int
+	MaxTokens           int
+	MCPConfig           string
+	SkillsDir           string
+	NoSkills            bool
 }
 
 // ErrHelp is returned when the user requested usage information.
@@ -110,6 +112,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		hooksPath         string
 		subagentMaxTokens int
 		subagentMaxTasks  int
+		sandbox           bool
+		sandboxNetwork    bool
 		allowSensitive    bool
 		allowEnv          bool
 		maxRetries        int
@@ -145,6 +149,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&hooksPath, "hooks", "", "opt-in JSON tool hooks file")
 	fs.IntVar(&subagentMaxTokens, "subagent-max-tokens", 0, "token budget per subagent task (default: 16000)")
 	fs.IntVar(&subagentMaxTasks, "subagent-max-tasks", 0, "maximum tasks per parallel call (default: 4)")
+	fs.BoolVar(&sandbox, "sandbox", false, "wrap bash in an OS-level sandbox (sandbox-exec/bwrap)")
+	fs.BoolVar(&sandboxNetwork, "sandbox-allow-network", false, "allow network inside --sandbox")
 	fs.BoolVar(&allowSensitive, "allow-sensitive", false, "allow reading .env, keys and credentials files")
 	fs.BoolVar(&allowEnv, "allow-env", false, "pass the full environment (including API keys) to bash")
 	fs.IntVar(&maxRetries, "max-retries", 0, "retry model calls on 429/5xx/timeouts (default: 2)")
@@ -298,6 +304,11 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	cfg.Sandbox = boolValue(visited["sandbox"], sandbox, getenv("EINO_AGENT_SANDBOX"))
+	cfg.SandboxAllowNetwork = boolValue(visited["sandbox-allow-network"], sandboxNetwork, getenv("EINO_AGENT_SANDBOX_ALLOW_NETWORK"))
+	if cfg.SandboxAllowNetwork && !cfg.Sandbox {
+		return nil, fmt.Errorf("sandbox-allow-network requires --sandbox")
+	}
 
 	cfg.Trace = firstNonEmpty(tracePath, getenv("EINO_AGENT_TRACE"))
 	if cfg.Trace != "" {
@@ -385,6 +396,8 @@ Safety and reliability:
   --hooks string            opt-in JSON tool hooks file
   --subagent-max-tokens int token budget per subagent task (default: 16000)
   --subagent-max-tasks int  maximum tasks per parallel call (default: 4)
+  --sandbox                 wrap bash in sandbox-exec/bwrap
+  --sandbox-allow-network   allow network inside --sandbox (default: denied)
   --allow-sensitive         allow reading .env, keys and credential files
   --allow-env               pass the full environment to bash (default: scrub secrets)
 
@@ -407,7 +420,8 @@ Environment:
   EINO_AGENT_ALLOW_SENSITIVE, EINO_AGENT_ALLOW_ENV,
   EINO_AGENT_PERMISSION_RULES, EINO_AGENT_NO_PERMISSION_RULES,
   EINO_AGENT_HOOKS,
-  EINO_AGENT_SUBAGENT_MAX_TOKENS, EINO_AGENT_SUBAGENT_MAX_TASKS
+  EINO_AGENT_SUBAGENT_MAX_TOKENS, EINO_AGENT_SUBAGENT_MAX_TASKS,
+  EINO_AGENT_SANDBOX, EINO_AGENT_SANDBOX_ALLOW_NETWORK
 
 Provider credentials:
   openai:  OPENAI_API_KEY,  optional OPENAI_BASE_URL,  OPENAI_MODEL
