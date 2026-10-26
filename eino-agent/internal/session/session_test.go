@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/schema"
 )
@@ -131,5 +132,45 @@ func TestCompactStoresSummaryAndKeepsRecent(t *testing.T) {
 	s.Clear()
 	if s.Summary != "" || len(s.Messages) != 0 {
 		t.Fatalf("clear left summary=%q messages=%+v", s.Summary, s.Messages)
+	}
+}
+
+func TestListNewestFirstAndKeepsCorruptEntries(t *testing.T) {
+	dir := t.TempDir()
+	first, err := New(dir, "/ws", "openai", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = first.Add("user", "one")
+	if _, err := first.Save(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	second, err := New(dir, "/ws", "openai", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = second.Add("user", "two")
+	if _, err := second.Save(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "broken.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	infos, err := List(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(infos) != 3 {
+		t.Fatalf("infos = %+v", infos)
+	}
+	if infos[0].ID != second.ID {
+		t.Fatalf("newest first: %+v", infos)
+	}
+	if infos[2].Error == "" {
+		t.Fatalf("corrupt entry error missing: %+v", infos)
+	}
+	if infos, err := List(filepath.Join(dir, "missing")); err != nil || len(infos) != 0 {
+		t.Fatalf("missing dir: infos=%+v err=%v", infos, err)
 	}
 }

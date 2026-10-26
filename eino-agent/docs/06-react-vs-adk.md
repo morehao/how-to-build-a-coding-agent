@@ -50,7 +50,7 @@ runtime: adk.ChatModelAgent + adk.Runner
 state: ADK session/state
 middleware: 本分支实际使用 summarization；ADK 生态另有 agentsmd / filesystem / skill / plantask / patchtoolcalls 等
 checkpoint: FileStore + RunnerConfig.CheckPointStore
-interrupt: ADK interrupt/resume（库能力，CLI 暂未暴露 /resume）
+interrupt: ADK interrupt/resume（库能力；CLI /resume 恢复的是 session，不是 Runner checkpoint）
 ```
 
 特点：
@@ -72,7 +72,7 @@ interrupt: ADK interrupt/resume（库能力，CLI 暂未暴露 /resume）
 | 历史 | `RunTurn(history)` 显式传入 | Runner session/state |
 | 压缩 | `MessageModifier` + contextmgr | summarization middleware |
 | checkpoint | 文件级 `.eino-agent/checkpoints` | `FileStore` + `RunnerConfig.CheckPointStore` |
-| 中断恢复 | 无 | `Runner.Resume` / `ResumeWithParams`（库能力） |
+| 中断恢复 | turn 级取消，不重放图状态 | `Runner.Resume` / `ResumeWithParams`（库能力） |
 | 子 agent | 自定义只读 ReAct runner | `subagent.NewADKRunner`，同一个 `task` 工具 |
 | skill | 共享 `internal/skill` 工具 | 同样用共享工具；也可换成 ADK `adk/middlewares/skill` |
 | skill fork | 只读 ReAct 子 agent | 只读 ADK 子 agent |
@@ -90,6 +90,7 @@ interrupt: ADK interrupt/resume（库能力，CLI 暂未暴露 /resume）
 注意：ADK 当前只从事件流翻译 `turn_*`/`tool_*`，没有 ReAct 的 `model_start`/`model_end`；ADK 的 checkpoint 是 Runner 状态，CLI 暂未暴露 `/resume`。共享 eval 断言应只依赖 `tool_start`/`final`/文件结果，避免绑定运行时细节。
 
 Skill 层两个分支都用本项目的 `internal/skill`，所以行为一致、便于对照。ADK 自带的 `adk/middlewares/skill` 更完整：`AgentHub`、`fork_with_context`、按 skill 覆盖 model/agent，并支持自定义 backend。本项目没有直接采用它，是为了让 ReAct 分支也能复用同一套 `SKILL.md` 语义；想深入 ADK middleware 时，可以把 `internal/skill.Backend` 适配成 ADK 的 `skill.Backend` 再逐步替换。
+
 
 ## 6. 选择建议
 

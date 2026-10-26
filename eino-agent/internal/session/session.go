@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -236,4 +237,57 @@ func newID() (string, error) {
 		return "", fmt.Errorf("generate session id: %w", err)
 	}
 	return time.Now().UTC().Format("20060102-150405") + "-" + hex.EncodeToString(b[:]), nil
+}
+
+// Info is a lightweight session inventory entry. Error is set when a file
+// exists but cannot be parsed, so one corrupt session does not hide the rest.
+type Info struct {
+	ID        string
+	Path      string
+	Workspace string
+	Provider  string
+	Model     string
+	UpdatedAt time.Time
+	Messages  int
+	Error     string
+}
+
+// List scans dir for session JSON files and returns them newest first. A
+// missing directory is treated as empty.
+func List(dir string) ([]Info, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read session directory: %w", err)
+	}
+	out := make([]Info, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		s, loadErr := Load(dir, path)
+		if loadErr != nil {
+			out = append(out, Info{ID: strings.TrimSuffix(entry.Name(), ".json"), Path: path, Error: loadErr.Error()})
+			continue
+		}
+		out = append(out, Info{
+			ID:        s.ID,
+			Path:      s.Path(),
+			Workspace: s.Workspace,
+			Provider:  s.Provider,
+			Model:     s.Model,
+			UpdatedAt: s.UpdatedAt,
+			Messages:  len(s.Messages),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	return out, nil
 }
