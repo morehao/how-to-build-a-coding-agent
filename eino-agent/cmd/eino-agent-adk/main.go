@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -71,8 +72,20 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	defer lines.Close()
 	approver := approval.NewWithSource(cfg.PermissionMode, lines, stdout, isTTY)
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	sigCh := make(chan os.Signal, 2)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigCh)
+	if cfg.Prompt != "" {
+		go func() {
+			select {
+			case <-sigCh:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
+	}
 
 	var checkpoints *checkpoint.Manager
 	var adkStore *agentadk.FileStore
@@ -223,7 +236,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	}
 
 	printBanner(u, cfg, ws, sess, rec)
-	return runREPL(ctx, lines, stdout, sess, persist, cfg, ws, chatModel, counter, runner, &replDeps{
+	return runREPL(ctx, cancel, sigCh, lines, stdout, sess, persist, cfg, ws, chatModel, counter, runner, &replDeps{
 		checkpoints: checkpoints,
 		files:       files,
 		budget:      tracker,
@@ -283,13 +296,47 @@ type replDeps struct {
 	budget      *budget.Tracker
 }
 
-func runREPL(ctx context.Context, lines *input.Source, stdout io.Writer, sess *session.Session, persist bool, cfg *config.Config, ws *workspace.Workspace, chatModel einomodel.BaseModel[*schema.Message], counter *contextmgr.Counter, runner *agentadk.Agent, extra *replDeps, u *ui.UI) int {
+func runREPL(ctx context.Context, cancel context.CancelFunc, sigCh <-chan os.Signal, lines *input.Source, stdout io.Writer, sess *session.Session, persist bool, cfg *config.Config, ws *workspace.Workspace, chatModel einomodel.BaseModel[*schema.Message], counter *contextmgr.Counter, runner *agentadk.Agent, extra *replDeps, u *ui.UI) int {
 	deps := &replDeps{sess: sess, cfg: cfg, ws: ws, model: chatModel, counter: counter, u: u}
 	if extra != nil {
 		deps.checkpoints = extra.checkpoints
 		deps.files = extra.files
 		deps.budget = extra.budget
 	}
+
+	var mu sync.Mutex
+	var turnCancel context.CancelFunc
+	interrupted := false
+	go func() {
+		for {
+			select {
+			case sig, ok := <-sigCh:
+				if !ok {
+					return
+				}
+				mu.Lock()
+				cancelTurn := turnCancel
+				active := cancelTurn != nil
+				if active {
+					turnCancel = nil
+					interrupted = true
+				}
+				mu.Unlock()
+				if active {
+					cancelTurn()
+					if sig == syscall.SIGTERM {
+						cancel()
+						return
+					}
+					continue
+				}
+				cancel()
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
 	for {
 		u.Prompt()
@@ -317,22 +364,36 @@ func runREPL(ctx context.Context, lines *input.Source, stdout io.Writer, sess *s
 			continue
 		}
 
-		history := append(historyFor(sess, ws), schema.UserMessage(input))
-		final, err := runner.RunTurn(ctx, history)
+		history := append(historyFor(deps.sess, ws), schema.UserMessage(input))
+		turnCtx, turnDone := context.WithCancel(ctx)
+		mu.Lock()
+		turnCancel = turnDone
+		interrupted = false
+		mu.Unlock()
+		final, err := runner.RunTurn(turnCtx, history)
+		turnDone()
+		mu.Lock()
+		turnCancel = nil
+		wasInterrupted := interrupted
+		mu.Unlock()
 		if err != nil {
+			if wasInterrupted && ctx.Err() == nil {
+				u.Warn("turn interrupted; partial work was not saved")
+				continue
+			}
 			if ctx.Err() != nil {
 				return 130
 			}
 			u.Error("error: %v", err)
 			continue
 		}
-		_ = sess.Add("user", input)
-		_ = sess.Add("assistant", final.Content)
-		if dropped := sess.Trim(cfg.HistoryBytes); dropped > 0 {
+		_ = deps.sess.Add("user", input)
+		_ = deps.sess.Add("assistant", final.Content)
+		if dropped := deps.sess.Trim(cfg.HistoryBytes); dropped > 0 {
 			u.Verbosef("dropped %d old messages to stay under %d bytes", dropped, cfg.HistoryBytes)
 		}
 		if persist {
-			if _, err := sess.Save(); err != nil {
+			if _, err := deps.sess.Save(); err != nil {
 				u.Warn("warning: could not save session: %v", err)
 			}
 		}
@@ -346,7 +407,7 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 	case "/exit", "/quit":
 		return true, 0
 	case "/help":
-		d.u.Info("commands: /help  /clear  /compact  /plan  /session  /stats  /undo  /checkpoints  /exit")
+		d.u.Info("commands: /help  /clear  /compact  /plan  /session  /sessions  /resume <id>  /stats  /undo  /checkpoints  /exit")
 		return true, -1
 	case "/clear":
 		d.sess.Clear()
@@ -370,6 +431,32 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 		return true, -1
 	case "/session":
 		d.u.Info("session: %s\nfile: %s", d.sess.ID, d.sess.Path())
+		return true, -1
+	case "/sessions":
+		infos, err := session.List(d.cfg.SessionDir)
+		if err != nil {
+			d.u.Error("sessions: %v", err)
+			return true, -1
+		}
+		if len(infos) == 0 {
+			d.u.Info("no saved sessions in %s", d.cfg.SessionDir)
+			return true, -1
+		}
+		for i, info := range infos {
+			if i >= 10 {
+				d.u.Info("... and %d older session(s)", len(infos)-10)
+				break
+			}
+			marker := " "
+			if info.ID == d.sess.ID {
+				marker = "*"
+			}
+			if info.Error != "" {
+				d.u.Info("%s %s  (unreadable: %s)", marker, info.ID, info.Error)
+				continue
+			}
+			d.u.Info("%s %s  %s  %d msg  %s", marker, info.ID, info.UpdatedAt.Format("2006-01-02 15:04"), info.Messages, info.Workspace)
+		}
 		return true, -1
 	case "/stats":
 		prompt, completion, total := d.budget.Stats()
@@ -416,6 +503,24 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 		}
 		return true, -1
 	default:
+		if strings.HasPrefix(input, "/resume ") {
+			id := strings.TrimSpace(strings.TrimPrefix(input, "/resume "))
+			if id == "" {
+				d.u.Warn("usage: /resume <session-id>")
+				return true, -1
+			}
+			loaded, err := session.Load(d.cfg.SessionDir, id)
+			if err != nil {
+				d.u.Error("resume: %v", err)
+				return true, -1
+			}
+			if loaded.Workspace != "" && loaded.Workspace != d.ws.Root() {
+				d.u.Warn("warning: session was created in %s; current workspace is %s", loaded.Workspace, d.ws.Root())
+			}
+			d.sess = loaded
+			d.u.Info("resumed session %s (%d messages)", loaded.ID, len(loaded.Messages))
+			return true, -1
+		}
 		if strings.HasPrefix(input, "/") {
 			d.u.Warn("unknown command %q; try /help", input)
 			return true, -1

@@ -2,10 +2,18 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/budget"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
 func TestADKFakeProviderTrace(t *testing.T) {
@@ -95,5 +103,44 @@ Read the diff before commenting.
 	}
 	if !strings.Contains(string(traceData), `"tool":"skill"`) {
 		t.Fatalf("skill tool was not called:\n%s", string(traceData))
+	}
+}
+
+func TestADKSlashSessionsAndResume(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := workspace.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := session.New(dir, ws.Root(), "openai", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := session.New(dir, ws.Root(), "openai", "m")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = other.Add("user", "old task")
+	_ = other.Add("assistant", "old answer")
+	if _, err := other.Save(); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	d := &replDeps{
+		sess:    current,
+		cfg:     &config.Config{SessionDir: dir},
+		ws:      ws,
+		counter: contextmgr.NewCounter(),
+		budget:  budget.New(0),
+		u:       ui.New(&out, &errOut, false, false),
+	}
+	handled, code := handleSlashCommand(context.Background(), "/sessions", d)
+	if !handled || code != -1 || !strings.Contains(out.String(), other.ID) {
+		t.Fatalf("sessions handled=%v code=%d out=%q", handled, code, out.String())
+	}
+	out.Reset()
+	handled, code = handleSlashCommand(context.Background(), "/resume "+other.ID, d)
+	if !handled || code != -1 || d.sess.ID != other.ID {
+		t.Fatalf("resume handled=%v code=%d session=%q out=%q", handled, code, d.sess.ID, out.String())
 	}
 }
