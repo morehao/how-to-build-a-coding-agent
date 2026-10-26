@@ -63,9 +63,8 @@ func Generate(ctx context.Context, m einomodel.BaseModel[*schema.Message], histo
 	if out == nil || strings.TrimSpace(out.Content) == "" {
 		return "", errors.New("summary: model returned an empty summary")
 	}
-	if counter != nil && out.ResponseMeta != nil && out.ResponseMeta.Usage != nil {
-		counter.Observe(out.ResponseMeta.Usage.PromptTokens, input)
-	}
+	// The CLI wraps the model in usageModel, which observes provider usage.
+	// Do not observe here as well or the same sample is counted twice.
 	content := strings.TrimSpace(out.Content)
 	if len(content) > MaxBytes {
 		content = truncateUTF8(content, MaxBytes) + "\n... [summary truncated]"
