@@ -31,7 +31,7 @@ graph: START → ChatModel → (ToolsNode → ChatModel)* → END
 state: Eino graph state
 streaming: StreamToolCallChecker
 checkpoint: 本项目文件级 checkpoint
-interrupt/resume: 无
+interrupt/resume: turn 级取消；/resume 恢复 session 快照
 ```
 
 特点：
