@@ -155,3 +155,41 @@ func TestWithSystem(t *testing.T) {
 		t.Fatalf("duplicate system added: %+v", again)
 	}
 }
+
+func TestCounterCalibrates(t *testing.T) {
+	c := NewCounter()
+	msgs := []*schema.Message{schema.UserMessage(strings.Repeat("a", 3000))}
+	base := c.Count(msgs)
+	if base == 0 || c.Ratio() != 1 {
+		t.Fatalf("base=%d ratio=%f", base, c.Ratio())
+	}
+	c.Observe(base*2, msgs)
+	if c.Ratio() <= 1 {
+		t.Fatalf("ratio = %f, want > 1", c.Ratio())
+	}
+	got := c.Count(msgs)
+	if got <= base {
+		t.Fatalf("count = %d, want > %d", got, base)
+	}
+	// Clamping keeps a bad sample from producing an absurd count.
+	c.Observe(1, msgs)
+	if c.Ratio() < 0.5 || c.Ratio() > 2 {
+		t.Fatalf("ratio out of bounds: %f", c.Ratio())
+	}
+}
+
+func TestCounterCompact(t *testing.T) {
+	c := NewCounter()
+	msgs := []*schema.Message{schema.SystemMessage("sys")}
+	for i := 0; i < 6; i++ {
+		msgs = append(msgs, schema.UserMessage(fmt.Sprintf("task-%d %s", i, strings.Repeat("u", 1000))))
+		msgs = append(msgs, schema.AssistantMessage(strings.Repeat("a", 1000), nil))
+	}
+	out, stats := c.CompactWithStats(msgs, 600)
+	if !stats.Changed() {
+		t.Fatalf("no compaction: %+v", stats)
+	}
+	if got := c.Count(out); got > 600 {
+		t.Fatalf("still over: %d", got)
+	}
+}

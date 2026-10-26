@@ -221,7 +221,7 @@ func TestRunTurnToolErrorIsRecoverable(t *testing.T) {
 
 func TestModifierCompactsMidTurn(t *testing.T) {
 	var stats contextmgr.Stats
-	mod := Modifier("system", 800, func(s contextmgr.Stats) { stats = s })
+	mod := Modifier("system", 800, contextmgr.NewCounter(), func(s contextmgr.Stats) { stats = s })
 
 	msgs := []*schema.Message{
 		schema.UserMessage("one"),

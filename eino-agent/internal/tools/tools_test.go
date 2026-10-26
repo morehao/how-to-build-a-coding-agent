@@ -311,3 +311,24 @@ func TestWrapToolTurnsErrorIntoOutput(t *testing.T) {
 		t.Fatal("cancellation did not propagate")
 	}
 }
+
+func TestUpdatePlan(t *testing.T) {
+	o, dir := testOptions(t)
+	out, err := o.updatePlan(context.Background(), updatePlanInput{Content: "## Goal\nship the feature\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, ".eino-agent/plan.md") {
+		t.Fatalf("output = %q", out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".eino-agent", "plan.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ship the feature") {
+		t.Fatalf("plan = %q", string(data))
+	}
+	if _, err := o.updatePlan(context.Background(), updatePlanInput{Content: strings.Repeat("x", 40*1024)}); err == nil {
+		t.Fatal("oversized plan did not error")
+	}
+}

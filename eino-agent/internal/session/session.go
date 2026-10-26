@@ -35,6 +35,7 @@ type Session struct {
 	Model     string    `json:"model"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	Summary   string    `json:"summary,omitempty"`
 	Messages  []Message `json:"messages"`
 
 	path string
@@ -109,9 +110,28 @@ func (s *Session) Add(role, content string) error {
 	return nil
 }
 
-// Clear removes all messages from memory. The session file is not deleted.
+// Clear removes all messages and the summary from memory. The session file is
+// not deleted.
 func (s *Session) Clear() {
 	s.Messages = s.Messages[:0]
+	s.Summary = ""
+	s.UpdatedAt = time.Now()
+}
+
+// Compact stores a structured summary and keeps at most keepRecent messages.
+// The retained slice is adjusted so it starts with a user message.
+func (s *Session) Compact(summary string, keepRecent int) {
+	s.Summary = summary
+	if keepRecent < 0 {
+		keepRecent = 0
+	}
+	if keepRecent > len(s.Messages) {
+		keepRecent = len(s.Messages)
+	}
+	s.Messages = append([]Message(nil), s.Messages[len(s.Messages)-keepRecent:]...)
+	for len(s.Messages) > 0 && s.Messages[0].Role != "user" {
+		s.Messages = s.Messages[1:]
+	}
 	s.UpdatedAt = time.Now()
 }
 
@@ -176,7 +196,7 @@ func (s *Session) Trim(maxBytes int) int {
 func (s *Session) Bytes() int { return s.bytes() }
 
 func (s *Session) bytes() int {
-	total := 0
+	total := len(s.Summary)
 	for _, m := range s.Messages {
 		total += len(m.Role) + len(m.Content) + 32
 	}
@@ -196,6 +216,18 @@ func (s *Session) SchemaMessages() []*schema.Message {
 		}
 	}
 	return out
+}
+
+// SchemaMessagesWithSummary injects the persisted summary before the retained
+// recent messages. The assistant acknowledgement keeps the role sequence
+// friendly to providers that dislike consecutive user messages.
+func (s *Session) SchemaMessagesWithSummary() []*schema.Message {
+	out := make([]*schema.Message, 0, len(s.Messages)+3)
+	if s.Summary != "" {
+		out = append(out, schema.UserMessage("[Context summary from earlier conversation; treat it as background]\n\n"+s.Summary))
+		out = append(out, schema.AssistantMessage("Understood. I will use the summary as background and continue from the retained messages.", nil))
+	}
+	return append(out, s.SchemaMessages()...)
 }
 
 func newID() (string, error) {

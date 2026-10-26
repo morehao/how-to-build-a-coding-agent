@@ -6,7 +6,9 @@ package contextmgr
 
 import (
 	"fmt"
+	"math"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/cloudwego/eino/schema"
@@ -71,7 +73,81 @@ func Compact(messages []*schema.Message, maxTokens int) []*schema.Message {
 
 // CompactWithStats is Compact plus a summary of the changes.
 func CompactWithStats(messages []*schema.Message, maxTokens int) ([]*schema.Message, Stats) {
-	stats := Stats{BeforeTokens: EstimateTokens(messages)}
+	return compactWithCount(messages, maxTokens, EstimateTokens)
+}
+
+// Counter tracks a calibrated token estimate. After the provider reports
+// prompt_tokens for a request, Observe updates a ratio between the local
+// estimate and the provider's count. This is not a tokenizer, but it converges
+// quickly and avoids a new dependency.
+type Counter struct {
+	mu      sync.Mutex
+	ratio   float64
+	samples int
+}
+
+// NewCounter returns a counter using the uncalibrated heuristic.
+func NewCounter() *Counter { return &Counter{ratio: 1} }
+
+// Count returns the calibrated token estimate.
+func (c *Counter) Count(messages []*schema.Message) int {
+	est := EstimateTokens(messages)
+	if c == nil {
+		return est
+	}
+	c.mu.Lock()
+	ratio := c.ratio
+	c.mu.Unlock()
+	if ratio <= 0 {
+		ratio = 1
+	}
+	return int(math.Round(float64(est) * ratio))
+}
+
+// Observe calibrates the counter against provider-reported prompt tokens.
+// The ratio is clamped to [0.5, 2] to prevent one bad sample from dominating.
+func (c *Counter) Observe(promptTokens int, messages []*schema.Message) {
+	if c == nil || promptTokens <= 0 {
+		return
+	}
+	est := EstimateTokens(messages)
+	if est <= 0 {
+		return
+	}
+	ratio := float64(promptTokens) / float64(est)
+	if ratio < 0.5 {
+		ratio = 0.5
+	}
+	if ratio > 2 {
+		ratio = 2
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.samples == 0 {
+		c.ratio = ratio
+	} else {
+		c.ratio = 0.7*c.ratio + 0.3*ratio
+	}
+	c.samples++
+}
+
+// Ratio returns the current calibration ratio (1 means uncalibrated).
+func (c *Counter) Ratio() float64 {
+	if c == nil {
+		return 1
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ratio
+}
+
+// CompactWithStats compacts using the calibrated counter.
+func (c *Counter) CompactWithStats(messages []*schema.Message, maxTokens int) ([]*schema.Message, Stats) {
+	return compactWithCount(messages, maxTokens, c.Count)
+}
+
+func compactWithCount(messages []*schema.Message, maxTokens int, count func([]*schema.Message) int) ([]*schema.Message, Stats) {
+	stats := Stats{BeforeTokens: count(messages)}
 	if maxTokens <= 0 || len(messages) == 0 || stats.BeforeTokens <= maxTokens {
 		stats.AfterTokens = stats.BeforeTokens
 		return messages, stats
@@ -83,19 +159,19 @@ func CompactWithStats(messages []*schema.Message, maxTokens int) ([]*schema.Mess
 	}
 
 	stubOldToolOutputs(out, &stats)
-	if EstimateTokens(out) <= maxTokens {
-		stats.AfterTokens = EstimateTokens(out)
+	if count(out) <= maxTokens {
+		stats.AfterTokens = count(out)
 		return out, stats
 	}
 
-	out = dropOldBlocks(out, maxTokens, &stats)
-	if EstimateTokens(out) <= maxTokens {
-		stats.AfterTokens = EstimateTokens(out)
+	out = dropOldBlocks(out, maxTokens, &stats, count)
+	if count(out) <= maxTokens {
+		stats.AfterTokens = count(out)
 		return out, stats
 	}
 
-	truncateToFit(out, maxTokens, &stats)
-	stats.AfterTokens = EstimateTokens(out)
+	truncateToFit(out, maxTokens, &stats, count)
+	stats.AfterTokens = count(out)
 	return out, stats
 }
 
@@ -139,7 +215,7 @@ func stubOldToolOutputs(messages []*schema.Message, stats *Stats) {
 	}
 }
 
-func dropOldBlocks(messages []*schema.Message, maxTokens int, stats *Stats) []*schema.Message {
+func dropOldBlocks(messages []*schema.Message, maxTokens int, stats *Stats, count func([]*schema.Message) int) []*schema.Message {
 	systemEnd := 0
 	for systemEnd < len(messages) && messages[systemEnd] != nil && messages[systemEnd].Role == schema.System {
 		systemEnd++
@@ -160,7 +236,7 @@ func dropOldBlocks(messages []*schema.Message, maxTokens int, stats *Stats) []*s
 		for _, b := range blocks {
 			candidate = append(candidate, b...)
 		}
-		if EstimateTokens(candidate) <= maxTokens {
+		if count(candidate) <= maxTokens {
 			return candidate
 		}
 		blocks = blocks[1:]
@@ -188,7 +264,7 @@ func splitBlocks(body []*schema.Message) [][]*schema.Message {
 	return blocks
 }
 
-func truncateToFit(messages []*schema.Message, maxTokens int, stats *Stats) {
+func truncateToFit(messages []*schema.Message, maxTokens int, stats *Stats, count func([]*schema.Message) int) {
 	lastUser := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i] != nil && messages[i].Role == schema.User {
@@ -197,7 +273,7 @@ func truncateToFit(messages []*schema.Message, maxTokens int, stats *Stats) {
 		}
 	}
 
-	for EstimateTokens(messages) > maxTokens {
+	for count(messages) > maxTokens {
 		idx := largestTruncatable(messages, func(i int) bool {
 			return messages[i] != nil && messages[i].Role != schema.System && i != lastUser
 		})

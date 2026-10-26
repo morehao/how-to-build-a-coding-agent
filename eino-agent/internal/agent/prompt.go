@@ -80,10 +80,15 @@ func LoadProjectInstructions(ws *workspace.Workspace) (string, string) {
 // compacts the model input before every call. ReAct's internal state
 // accumulates tool messages, so this is the one place that both guarantees the
 // system message is first and enforces the context budget mid-turn.
-func Modifier(systemPrompt string, maxTokens int, onCompact func(contextmgr.Stats)) func(context.Context, []*schema.Message) []*schema.Message {
+func Modifier(systemPrompt string, maxTokens int, counter *contextmgr.Counter, onCompact func(contextmgr.Stats)) func(context.Context, []*schema.Message) []*schema.Message {
 	return func(_ context.Context, input []*schema.Message) []*schema.Message {
 		out := contextmgr.WithSystem(systemPrompt, input)
-		out, stats := contextmgr.CompactWithStats(out, maxTokens)
+		var stats contextmgr.Stats
+		if counter != nil {
+			out, stats = counter.CompactWithStats(out, maxTokens)
+		} else {
+			out, stats = contextmgr.CompactWithStats(out, maxTokens)
+		}
 		if stats.Changed() && onCompact != nil {
 			onCompact(stats)
 		}
