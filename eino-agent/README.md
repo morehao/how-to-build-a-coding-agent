@@ -109,7 +109,7 @@ REPL 中 Ctrl-C 取消当前 turn 并回到提示符，不写入未完成的历�
 
 ## 工具
 
-模型看到八个内置工具；`task`、`tasks` 和 `skill` 由 CLI 按需注入，最多十一个：
+模型看到九个内置工具；`task`、`tasks` 和 `skill` 由 CLI 按需注入，最多十二个：
 
 | 工具 | 行为 | 关键限制 |
 | --- | --- | --- |
@@ -121,6 +121,7 @@ REPL 中 Ctrl-C 取消当前 turn 并回到提示符，不写入未完成的历�
 | `bash` | 工作区根目录 `bash -c` | 默认 120s、最大 600s；输出头尾各约 128 KiB；超时杀进程组 |
 | `code_search` | 正则搜索，优先 `rg`，否则 Go walker | 默认 100 条、最大 500 条；单文件 `rg` 最多 100 |
 | `update_plan` | 整体替换 `.eino-agent/plan.md` | 最大 32 KiB |
+| `recall` | 在 plan 和最近 session 中做关键词检索 | 最多扫 50 个同工作区 session；最多 20 条命中 |
 | `task` | 委派一个只读子 agent（可选） | 子 agent 无 edit/bash，不能再委派；默认 2 分钟、64 KiB 报告上限 |
 | `tasks` | 并行委派多个只读子 agent（可选） | 每个 task 独立 runner + token 预算；最多 `--subagent-max-tasks` 个，结果按输入顺序返回 |
 | `skill` | 按名加载 `SKILL.md` 正文（可选） | 只读；渐进式披露；`fork` 走只读子 agent |

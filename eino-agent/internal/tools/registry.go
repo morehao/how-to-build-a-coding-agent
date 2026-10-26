@@ -30,6 +30,7 @@ type Options struct {
 	MaxOutputBytes int
 	BashTimeout    time.Duration
 	RGPath         string
+	SessionDir     string
 
 	// v2 capabilities.
 	Checkpoints           *checkpoint.Manager
@@ -116,6 +117,15 @@ func New(ctx context.Context, opts Options) ([]tool.BaseTool, error) {
 		return nil, fmt.Errorf("register bash: %w", err)
 	}
 
+	recallTool, err := utils.InferTool(
+		"recall",
+		"Search the persistent working-memory plan and recent session snapshots by keyword. Use it to recover earlier decisions, commands or file notes without loading whole sessions into context.",
+		wrapTool(&opts, opts.recall),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("register recall: %w", err)
+	}
+
 	planTool, err := utils.InferTool(
 		"update_plan",
 		"Create or replace the persistent working-memory plan at .eino-agent/plan.md. Use it to preserve goals, decisions, changed files, command results, open errors and next steps across context compaction.",
@@ -134,7 +144,7 @@ func New(ctx context.Context, opts Options) ([]tool.BaseTool, error) {
 		return nil, fmt.Errorf("register code_search: %w", err)
 	}
 
-	return []tool.BaseTool{readTool, listTool, editTool, patchTool, repoMapTool, bashTool, searchTool, planTool}, nil
+	return []tool.BaseTool{readTool, listTool, editTool, patchTool, repoMapTool, bashTool, searchTool, recallTool, planTool}, nil
 }
 
 // wrapTool turns operational errors into tool output ("ERROR: ...") so the

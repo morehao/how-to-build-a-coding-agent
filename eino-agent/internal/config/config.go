@@ -430,7 +430,7 @@ Provider credentials:
   fake:    no key; requires --script
 
 Slash commands in the REPL:
-  /help /clear /compact /plan /session /stats /undo /checkpoints /exit
+  /help /clear /compact /plan /recall <query> /session /sessions /resume <id> /stats /undo /checkpoints /exit
 
 Examples:
   export OPENAI_API_KEY=sk-...
