@@ -430,3 +430,13 @@ func TestEditRejectsBinary(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestEditRejectsBinaryCreate(t *testing.T) {
+	o, dir := testOptions(t)
+	if _, err := o.editFile(context.Background(), editFileInput{Path: "new.dat", NewStr: "a\x00b"}); err == nil || !strings.Contains(err.Error(), "binary") {
+		t.Fatalf("err = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "new.dat")); !os.IsNotExist(err) {
+		t.Fatalf("binary file was created: %v", err)
+	}
+}

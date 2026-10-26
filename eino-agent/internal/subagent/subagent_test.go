@@ -43,6 +43,27 @@ func TestTaskTool(t *testing.T) {
 	}
 }
 
+type errorRunner struct{}
+
+func (errorRunner) Run(context.Context, string) (string, error) {
+	return "", context.DeadlineExceeded
+}
+
+func TestTaskToolSoftensRunnerError(t *testing.T) {
+	taskTool, err := NewTaskTool(errorRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv := taskTool.(tool.InvokableTool)
+	out, err := inv.InvokableRun(context.Background(), `{"description":"x","prompt":"y"}`)
+	if err != nil {
+		t.Fatalf("task error should be tool output, got %v", err)
+	}
+	if !strings.HasPrefix(out, "ERROR:") || !strings.Contains(out, "deadline exceeded") {
+		t.Fatalf("out = %q", out)
+	}
+}
+
 func TestNestedRunnerIsReadOnly(t *testing.T) {
 	root := t.TempDir()
 	marker := filepath.Join(root, "marker")

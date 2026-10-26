@@ -123,3 +123,19 @@ func TestApplyPatchDeniedInReadOnly(t *testing.T) {
 		t.Fatal("expected read-only error")
 	}
 }
+
+func TestApplyPatchRejectsBinaryResult(t *testing.T) {
+	root := t.TempDir()
+	opts := newPatchOptions(t, root, config.PermissionYolo)
+	path := filepath.Join(root, "a.txt")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := "--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-old\n+new\x00bad\n"
+	if _, err := opts.applyPatch(context.Background(), applyPatchInput{Patch: p}); err == nil || !strings.Contains(err.Error(), "binary") {
+		t.Fatalf("err = %v", err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != "old\n" {
+		t.Fatalf("file changed: %q", data)
+	}
+}

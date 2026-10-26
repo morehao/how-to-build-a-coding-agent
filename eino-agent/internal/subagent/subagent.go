@@ -151,7 +151,10 @@ func NewTaskTool(r Runner) (tool.BaseTool, error) {
 			}
 			out, err := r.Run(ctx, in.Prompt)
 			if err != nil {
-				return "", err
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				return "ERROR: subagent task failed: " + err.Error(), nil
 			}
 			return fmt.Sprintf("subagent (%s):\n%s", strings.TrimSpace(in.Description), out), nil
 		},

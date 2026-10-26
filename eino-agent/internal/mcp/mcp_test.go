@@ -73,8 +73,12 @@ func TestGatedToolNameAndApproval(t *testing.T) {
 func TestGatedToolReadOnlyDenied(t *testing.T) {
 	stub := &stubTool{name: "echo"}
 	g := &gatedTool{inner: stub, invoke: stub, server: "demo", mode: config.PermissionReadOnly}
-	if _, err := g.InvokableRun(context.Background(), "{}"); err == nil {
-		t.Fatal("expected read-only denial")
+	out, err := g.InvokableRun(context.Background(), "{}")
+	if err != nil {
+		t.Fatalf("policy denial should be a tool error string, got %v", err)
+	}
+	if !strings.HasPrefix(out, "ERROR:") {
+		t.Fatalf("out = %q, want ERROR prefix", out)
 	}
 	if stub.called {
 		t.Fatal("tool should not run")
