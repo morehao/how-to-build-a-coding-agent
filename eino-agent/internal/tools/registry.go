@@ -1,4 +1,4 @@
-// Package tools defines the six tools exposed to the Eino ReAct agent. Each
+// Package tools defines the built-in tools exposed to the agent. Each
 // tool is a typed Go function registered with utils.InferTool, so the JSON
 // schema seen by the model is derived from the input struct.
 package tools
