@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/middlewares/summarization"
@@ -18,25 +19,30 @@ import (
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 	contextsummary "github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/summary"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/trace"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 )
 
 // Config configures the ADK runner.
 type Config struct {
-	Model         model.ToolCallingChatModel
-	Tools         []tool.BaseTool
-	SystemPrompt  string
-	MaxSteps      int
-	ContextTokens int
-	Counter       *contextmgr.Counter
-	Stream        bool
-	UI            *ui.UI
+	Model           model.ToolCallingChatModel
+	Tools           []tool.BaseTool
+	SystemPrompt    string
+	MaxSteps        int
+	ContextTokens   int
+	Counter         *contextmgr.Counter
+	Stream          bool
+	UI              *ui.UI
+	Trace           *trace.Recorder
+	CheckPointStore adk.CheckPointStore
 }
 
 // Agent wraps an ADK ChatModelAgent and Runner.
 type Agent struct {
 	runner *adk.Runner
 	ui     *ui.UI
+	trace  *trace.Recorder
+	turn   int
 }
 
 // New constructs the ADK agent. ADK owns the tool loop, iteration limit and
@@ -114,8 +120,9 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 	runner := adk.NewRunner(ctx, adk.RunnerConfig{
 		Agent:           chatAgent,
 		EnableStreaming: cfg.Stream,
+		CheckPointStore: cfg.CheckPointStore,
 	})
-	return &Agent{runner: runner, ui: cfg.UI}, nil
+	return &Agent{runner: runner, ui: cfg.UI, trace: cfg.Trace}, nil
 }
 
 // fallbackSummarizer turns a failed summarization model call into a warning
@@ -143,7 +150,23 @@ func (f *fallbackSummarizer) BeforeModelRewriteState(ctx context.Context, state 
 
 // RunTurn executes one user turn and consumes the ADK event stream to
 // completion, returning the last assistant message.
-func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (*schema.Message, error) {
+func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (final *schema.Message, err error) {
+	a.turn++
+	turn := a.turn
+	start := time.Now()
+	a.trace.TurnStart(turn, lastUserContent(history))
+	defer func() {
+		var content string
+		var usage *schema.TokenUsage
+		if final != nil {
+			content = final.Content
+			if final.ResponseMeta != nil {
+				usage = final.ResponseMeta.Usage
+			}
+		}
+		a.trace.TurnEnd(turn, content, usage, err, time.Since(start))
+	}()
+
 	iter := a.runner.Run(ctx, history)
 	var (
 		finalContent string
@@ -164,23 +187,27 @@ func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (*schema
 
 		switch mv.Role {
 		case schema.Tool:
-			msg, err := mv.GetMessage()
-			if err != nil {
-				return nil, fmt.Errorf("adk tool result: %w", err)
+			msg, getErr := mv.GetMessage()
+			if getErr != nil {
+				return nil, fmt.Errorf("adk tool result: %w", getErr)
 			}
-			if a.ui != nil && msg != nil {
-				a.ui.ToolEnd(mv.ToolName, msg.Content, nil)
-				if strings.HasPrefix(msg.Content, "ERROR:") {
-					a.ui.Warn("tool %s reported: %s", mv.ToolName, firstLine(msg.Content))
+			var toolErr error
+			if msg != nil {
+				if strings.HasPrefix(strings.TrimSpace(msg.Content), "ERROR:") {
+					toolErr = errors.New(firstLine(msg.Content))
 				}
+				if a.ui != nil {
+					a.ui.ToolEnd(mv.ToolName, msg.Content, toolErr)
+				}
+				a.trace.ToolEnd(mv.ToolName, msg.Content, toolErr)
 			}
 
 		case schema.Assistant:
-			content, usage, err := a.handleAssistant(ctx, mv)
-			if err != nil {
-				return nil, err
+			content, usage, hasToolCalls, handleErr := a.handleAssistant(ctx, mv)
+			if handleErr != nil {
+				return nil, handleErr
 			}
-			if strings.TrimSpace(content) != "" {
+			if !hasToolCalls && strings.TrimSpace(content) != "" {
 				finalContent = content
 			}
 			if usage != nil {
@@ -195,22 +222,26 @@ func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (*schema
 	if strings.TrimSpace(finalContent) == "" {
 		return nil, errors.New("adk: no assistant response")
 	}
-	final := schema.AssistantMessage(finalContent, nil)
+	final = schema.AssistantMessage(finalContent, nil)
 	if finalUsage != nil {
 		final.ResponseMeta = &schema.ResponseMeta{Usage: finalUsage}
 	}
 	return final, nil
 }
 
-func (a *Agent) handleAssistant(_ context.Context, mv *adk.MessageVariant) (string, *schema.TokenUsage, error) {
+func (a *Agent) handleAssistant(_ context.Context, mv *adk.MessageVariant) (string, *schema.TokenUsage, bool, error) {
 	if !mv.IsStreaming {
 		msg := mv.Message
 		if msg == nil {
-			return "", nil, nil
+			return "", nil, false, nil
 		}
-		if len(msg.ToolCalls) > 0 && a.ui != nil {
+		hasToolCalls := len(msg.ToolCalls) > 0
+		if hasToolCalls {
 			for _, tc := range msg.ToolCalls {
-				a.ui.ToolStart(tc.Function.Name, tc.Function.Arguments)
+				if a.ui != nil {
+					a.ui.ToolStart(tc.Function.Name, tc.Function.Arguments)
+				}
+				a.trace.ToolStart(tc.Function.Name, tc.Function.Arguments)
 			}
 		}
 		if msg.Content != "" {
@@ -222,11 +253,11 @@ func (a *Agent) handleAssistant(_ context.Context, mv *adk.MessageVariant) (stri
 		if msg.ResponseMeta != nil {
 			usage = msg.ResponseMeta.Usage
 		}
-		return msg.Content, usage, nil
+		return msg.Content, usage, hasToolCalls, nil
 	}
 
 	if mv.MessageStream == nil {
-		return "", nil, errors.New("adk: assistant stream is nil")
+		return "", nil, false, errors.New("adk: assistant stream is nil")
 	}
 	defer mv.MessageStream.Close()
 
@@ -242,7 +273,7 @@ func (a *Agent) handleAssistant(_ context.Context, mv *adk.MessageVariant) (stri
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return "", nil, fmt.Errorf("adk assistant stream: %w", err)
+			return "", nil, false, fmt.Errorf("adk assistant stream: %w", err)
 		}
 		if chunk == nil {
 			continue
@@ -269,14 +300,18 @@ func (a *Agent) handleAssistant(_ context.Context, mv *adk.MessageVariant) (stri
 	if started && a.ui != nil {
 		a.ui.AgentEnd()
 	}
-	if len(toolChunks) > 0 && a.ui != nil {
+	hasToolCalls := len(toolChunks) > 0
+	if hasToolCalls {
 		if merged, err := schema.ConcatMessages(toolChunks); err == nil && merged != nil {
 			for _, tc := range merged.ToolCalls {
-				a.ui.ToolStart(tc.Function.Name, tc.Function.Arguments)
+				if a.ui != nil {
+					a.ui.ToolStart(tc.Function.Name, tc.Function.Arguments)
+				}
+				a.trace.ToolStart(tc.Function.Name, tc.Function.Arguments)
 			}
 		}
 	}
-	return content.String(), usage, nil
+	return content.String(), usage, hasToolCalls, nil
 }
 
 func toolNames(ctx context.Context, tools []tool.BaseTool) ([]string, error) {
@@ -289,6 +324,15 @@ func toolNames(ctx context.Context, tools []tool.BaseTool) ([]string, error) {
 		names = append(names, info.Name)
 	}
 	return names, nil
+}
+
+func lastUserContent(history []*schema.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i] != nil && history[i].Role == schema.User {
+			return history[i].Content
+		}
+	}
+	return ""
 }
 
 func firstLine(s string) string {

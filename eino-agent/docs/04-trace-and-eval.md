@@ -24,6 +24,8 @@ eino-agent --trace .eino-agent/trace.jsonl ...
 
 公共字段：`ts`（RFC3339Nano）、`seq`（单调递增）、`turn`、`type`。
 
+ReAct 入口在完整生命周期发出全部七类事件；ADK 入口目前从 ADK 事件流翻译 `turn_*` 和 `tool_*`（ADK 没有暴露等价的 model 生命周期事件）。eval 只依赖 `tool_start`、`final` 和文件结果，因此两个入口共用同一套场景。
+
 示例：
 
 ```json

@@ -48,8 +48,8 @@ interrupt/resume: 无
 runtime: adk.ChatModelAgent + adk.Runner
 state: ADK session/state
 middleware: summarization / agentsmd / filesystem / plantask / patchtoolcalls ...
-checkpoint: ADK CheckPointStore + Runner.Resume
-interrupt: ADK interrupt/resume
+checkpoint: FileStore + RunnerConfig.CheckPointStore
+interrupt: ADK interrupt/resume（库能力，CLI 暂未暴露 /resume）
 ```
 
 特点：
@@ -70,9 +70,9 @@ interrupt: ADK interrupt/resume
 | 工具 | `compose.ToolsNode` | ADK tools node |
 | 历史 | `RunTurn(history)` 显式传入 | Runner session/state |
 | 压缩 | `MessageModifier` + contextmgr | summarization middleware |
-| checkpoint | 文件级 `.eino-agent/checkpoints` | `CheckPointStore` |
-| 中断恢复 | 无 | `Runner.Resume` |
-| 子 agent | 自定义只读 ReAct runner | 可复用同一 `subagent.Runner` 接口，或 ADK `NewAgentTool` |
+| checkpoint | 文件级 `.eino-agent/checkpoints` | `FileStore` + `RunnerConfig.CheckPointStore` |
+| 中断恢复 | 无 | `Runner.Resume` / `ResumeWithParams`（库能力） |
+| 子 agent | 自定义只读 ReAct runner | `subagent.NewADKRunner`，同一个 `task` 工具 |
 | 学习曲线 | 低 | 中高 |
 
 ## 5. 如何对比学习
@@ -80,11 +80,11 @@ interrupt: ADK interrupt/resume
 建议用同一组 eval 场景分别跑两个分支，比较：
 
 1. 同样的 fake script，工具调用顺序是否一致；
-2. context 压缩后，`model_start.messages` 是否保留 tool call/result 配对；
+2. context 压缩后，ReAct 的 `model_start.messages` 是否保留 tool call/result 配对（ADK 分支看 `GenModelInput` 的结果）；
 3. 中途取消后，ADK 是否能 resume，ReAct 分支行为如何；
 4. 加一个 middleware（例如动态注入 AGENTS.md）在两边的成本。
 
-注意：ADK 分支的 trace 字段可能多了 runner/session 相关事件；共享的 eval 断言应尽量只依赖 `tool_start`/`final`/文件结果，避免绑定运行时细节。
+注意：ADK 当前只从事件流翻译 `turn_*`/`tool_*`，没有 ReAct 的 `model_start`/`model_end`；ADK 的 checkpoint 是 Runner 状态，CLI 暂未暴露 `/resume`。共享 eval 断言应只依赖 `tool_start`/`final`/文件结果，避免绑定运行时细节。
 
 ## 6. 选择建议
 

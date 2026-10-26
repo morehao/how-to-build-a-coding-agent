@@ -84,7 +84,7 @@ REPL 命令：
 | `--max-total-tokens` | session token 上限，0 不限 | `0` |
 | `--max-retries` | 429/5xx/timeout 重试次数 | `2` |
 | `--retry-base-ms` | 退避基数 | `500` |
-| `--no-checkpoints` | 关闭 `/undo` 快照 | 开启 |
+| `--no-checkpoints` | 关闭 `/undo` 快照和 ADK Runner checkpoint | 开启 |
 | `--no-read-before-edit` | 关闭读后写检查 | 开启 |
 | `--allow-sensitive` | 允许读写 `.env`/密钥/凭据 | 拒绝 |
 | `--allow-env` | bash 传入完整环境变量 | 过滤 secret |
@@ -178,10 +178,12 @@ ADK 入口使用 Eino ADK 的 `summarization` middleware：
 
 ## ADK checkpoint 与 interrupt
 
-ADK 入口通过 `RunnerConfig.CheckPointStore` 保存 Runner 状态，并支持 `Runner.Resume`：
+ADK 入口使用 `internal/agentadk.FileStore` 实现 `adk.CheckPointStore`，默认落在 `.eino-agent/adk-checkpoints`：
 
-- 与 ReAct 的文件级 `/undo` 不同，ADK checkpoint 保存的是运行时状态，适合中断后继续；
+- 与 ReAct 的文件级 `/undo` 不同，ADK checkpoint 保存的是 Runner 运行时状态，适合中断后继续；
+- checkpoint id 经 SHA-256 映射为文件名，避免路径逃逸；
 - `/undo` 仍然只回滚文件，两者语义不同，不要混用；
+- ADK Runner 本身提供 `Resume`/`ResumeWithParams`，但当前 CLI 没有暴露 `/resume`；需要时在测试或后续迭代中接入；
 - 具体行为以 `internal/agentadk` 和 ADK 版本为准；升级 ADK 时先跑 ADK 单测和共享 eval。
 
 ## Trace 与 Eval
@@ -191,7 +193,7 @@ ADK 入口通过 `RunnerConfig.CheckPointStore` 保存 Runner 状态，并支持
 jq -c 'select(.type=="tool_start") | {tool,args}' .eino-agent/trace.jsonl
 ```
 
-JSONL 事件：`turn_start`、`model_start`、`model_end`、`model_error`、`tool_start`、`tool_end`、`turn_end`，公共字段 `ts`/`seq`/`turn`/`type`。字符串截断到 16 KiB；环境变量名含 `KEY`/`TOKEN`/`SECRET`/`PASSWORD` 的值会被替换为 `[redacted]`。
+JSONL 事件：`turn_start`、`model_start`、`model_end`、`model_error`、`tool_start`、`tool_end`、`turn_end`，公共字段 `ts`/`seq`/`turn`/`type`。ReAct 入口发出全部七类；ADK 入口从 ADK 事件流翻译 `turn_*`/`tool_*`，不伪造模型生命周期事件。字符串截断到 16 KiB；环境变量名含 `KEY`/`TOKEN`/`SECRET`/`PASSWORD` 的值会被替换为 `[redacted]`。
 
 fake provider + eval：
 
@@ -288,13 +290,14 @@ go test -race ./...
 测试不需要 API key：
 
 - `internal/agent`：fake `ToolCallingChatModel` 驱动真实 ReAct 图 + 真实工具；
-- `internal/agent` eval：`testdata/scenarios` 的确定性场景；
+- `internal/agent` / `internal/agentadk` eval：`testdata/scenarios` 的确定性场景，两个入口各跑一遍；
 - `internal/contextmgr`：token 估算、校准、tool 配对、整块丢弃、截断；
 - `internal/tools`：读/写/列/搜索/bash 审批/超时/截断、patch、repo_map、policy；
 - `internal/approval`：交互、always 记忆、read-only、非 TTY、超大 payload；
 - `internal/checkpoint` / `filestate`：快照/undo、读后写；
 - `internal/patch`：多文件/hunk、上下文不匹配、行数校验；
 - `internal/mcp`：配置校验、gating、真实 stdio server 集成；
+- `internal/agentadk`：ADK trace、最终内容、FileStore checkpoint；
 - `internal/trace`：脱敏、截断、JSONL 合法性；
 - `internal/model`：fake script、retry、budget；
 - `internal/workspace`：路径/symlink 逃逸、`.einoignore`；
