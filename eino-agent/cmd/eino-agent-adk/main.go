@@ -134,6 +134,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		Mode:                  cfg.PermissionMode,
 		MaxOutputBytes:        256 * 1024,
 		BashTimeout:           120 * time.Second,
+		SessionDir:            cfg.SessionDir,
 		Checkpoints:           checkpoints,
 		Files:                 files,
 		EnforceReadBeforeEdit: !cfg.NoReadBeforeEdit,
@@ -461,7 +462,7 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 	case "/exit", "/quit":
 		return true, 0
 	case "/help":
-		d.u.Info("commands: /help  /clear  /compact  /plan  /session  /sessions  /resume <id>  /stats  /undo  /checkpoints  /exit")
+		d.u.Info("commands: /help  /clear  /compact  /plan  /recall <query>  /session  /sessions  /resume <id>  /stats  /undo  /checkpoints  /exit")
 		return true, -1
 	case "/clear":
 		d.sess.Clear()
@@ -557,6 +558,27 @@ func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, i
 		}
 		return true, -1
 	default:
+		if strings.HasPrefix(input, "/recall ") {
+			query := strings.TrimSpace(strings.TrimPrefix(input, "/recall "))
+			hits, err := memory.Search(d.ws, d.cfg.SessionDir, query, 5)
+			if err != nil {
+				d.u.Error("recall: %v", err)
+				return true, -1
+			}
+			if len(hits) == 0 {
+				d.u.Info("no memory hits for %q", query)
+				return true, -1
+			}
+			for _, h := range hits {
+				switch h.Source {
+				case "session":
+					d.u.Info("[session %s %s %s] %s", h.SessionID, h.When.Format("2006-01-02 15:04"), h.Role, h.Snippet)
+				default:
+					d.u.Info("[%s %s] %s", h.Source, h.Role, h.Snippet)
+				}
+			}
+			return true, -1
+		}
 		if strings.HasPrefix(input, "/resume ") {
 			id := strings.TrimSpace(strings.TrimPrefix(input, "/resume "))
 			if id == "" {
