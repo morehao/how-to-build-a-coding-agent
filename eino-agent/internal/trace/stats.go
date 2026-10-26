@@ -33,6 +33,7 @@ type Stats struct {
 // and errors. Malformed lines are skipped; an empty trace is valid.
 func Summarize(r io.Reader) (Stats, error) {
 	var st Stats
+	modelEnded := false
 	if r == nil {
 		return st, nil
 	}
@@ -59,8 +60,10 @@ func Summarize(r io.Reader) (Stats, error) {
 		switch ev["type"] {
 		case "turn_start":
 			st.Turns++
+			modelEnded = false
 		case "model_end":
 			st.ModelCalls++
+			modelEnded = true
 			addUsage(&st, ev["usage"])
 			addDuration(&st.ModelMS, ev["duration_ms"])
 		case "model_error":
@@ -74,7 +77,11 @@ func Summarize(r io.Reader) (Stats, error) {
 				st.Errors = append(st.Errors, msg)
 			}
 		case "turn_end":
-			addUsage(&st, ev["usage"])
+			// ReAct records token usage on model_end; ADK does not, so only
+			// fall back to turn_end when this turn had no model_end event.
+			if !modelEnded {
+				addUsage(&st, ev["usage"])
+			}
 			if msg := stringField(ev, "error"); msg != "" {
 				st.Errors = append(st.Errors, msg)
 			}
