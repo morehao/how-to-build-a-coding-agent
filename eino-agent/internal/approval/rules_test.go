@@ -88,3 +88,10 @@ func TestRulesAllowNonTTYWithoutPrompt(t *testing.T) {
 		t.Fatalf("deny decision=%v err=%v", decision, err)
 	}
 }
+
+func TestDiffStat(t *testing.T) {
+	added, removed := diffStat("--- a/x\n+++ b/x\n@@ -1 +1 @@\n-old\n+new\n+extra\n")
+	if added != 2 || removed != 1 {
+		t.Fatalf("added=%d removed=%d", added, removed)
+	}
+}
