@@ -24,6 +24,7 @@ type fakeState struct {
 	summaryCalls int
 	script       []*schema.Message
 	lastInput    []*schema.Message
+	summaryInput []*schema.Message
 }
 
 func (s *fakeState) next(input []*schema.Message) *schema.Message {
@@ -33,6 +34,7 @@ func (s *fakeState) next(input []*schema.Message) *schema.Message {
 	if isSummaryPrompt(input) {
 		s.calls++
 		s.summaryCalls++
+		s.summaryInput = input
 		return schema.AssistantMessage("SUMMARY: the user inspected the fixture and the next step is to finish.", nil)
 	}
 	idx := s.calls - s.summaryCalls
@@ -235,6 +237,9 @@ func TestADKSummarizesLongContext(t *testing.T) {
 	if state.summaryCalls == 0 {
 		t.Fatalf("summarization did not run; calls=%d", state.calls)
 	}
+	if !strings.Contains(messageText(state.summaryInput), "## Next steps") {
+		t.Fatalf("summary prompt is not structured: %+v", state.summaryInput)
+	}
 	if state.calls < 3 {
 		t.Fatalf("calls = %d, want >= 3", state.calls)
 	}
@@ -300,4 +305,15 @@ func TestADKSummarizationFailureFallsBack(t *testing.T) {
 	if !strings.Contains(out.String()+errOut.String(), "summarization failed") {
 		t.Fatalf("fallback warning missing: out=%q err=%q", out.String(), errOut.String())
 	}
+}
+
+func messageText(msgs []*schema.Message) string {
+	var b strings.Builder
+	for _, m := range msgs {
+		if m != nil {
+			b.WriteString(m.Content)
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }

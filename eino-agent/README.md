@@ -132,14 +132,15 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 
 ADK 入口使用 Eino ADK 自带的 `summarization` middleware：
 
-- 当估算 token 超过 `--context-tokens` 的 **2/3** 时，调用同一个模型生成摘要；摘要 prompt 要求保留用户目标、已改文件、执行过的命令与结果、未解决错误和下一步；
+- 当估算 token 超过 `--context-tokens` 的 **2/3** 时，调用同一个模型生成摘要；摘要使用 `internal/summary` 的结构化模板，固定保留目标、决策、改动文件、命令结果、错误和下一步；
 - 摘要后仍然超预算，或摘要没有触发时，`GenModelInput` 再用 `internal/contextmgr` 做硬上限压缩，保证模型输入不超过 `--context-tokens`；
 - 摘要本身会产生一次额外模型调用；如果摘要调用失败，会打印警告并退回确定性压缩，而不是让本轮直接失败。
 
 ### 共同点与限制
 
 - 跨轮持久化由 `session.Trim` 处理：`--history-bytes` 是保存到 session 的历史总量，优先丢掉最旧的消息，并保证第一条是 user；
-- token 数是保守估算（约 `bytes/3`），不是 provider 的精确 tokenizer；默认 32000 对多数模型是安全值，模型上下文更大时可以调高；
+- token 数默认是保守估算（约 `bytes/3`）；每次模型响应带 `prompt_tokens` 时，`usageModel` 会用 provider 的 usage 校准估算比例，后续更接近实际值。它不是离线 tokenizer，默认 32000 对多数模型是安全值；
+- `/compact` 在两个入口都可用：调用模型生成结构化摘要，替换旧历史并保留最近两条消息；摘要会写入 session；
 - 被省略/截断的内容会在 prompt 里提示模型：需要细节就带更小的 `limit` / `max_results` 重新调用工具。
 
 ## 权限与安全
@@ -176,7 +177,8 @@ ADK 入口使用 Eino ADK 自带的 `summarization` middleware：
 - 默认目录：`os.UserConfigDir()/eino-agent/sessions`；
 - `--resume <id>` 在 session 目录中查找，`--resume <path.json>` 直接读文件；
 - 恢复时会提示 session 记录的工作区与当前工作区是否不同；
-- 历史按近似字节数裁剪，优先丢弃最旧的消息，并保证第一条是 user。
+- 历史按近似字节数裁剪，优先丢弃最旧的消息，并保证第一条是 user；
+- `/compact` 会把结构化摘要写入可选 `summary` 字段，并保留最近两条消息；恢复会话时摘要会作为 background 注入。
 
 ## 架构
 
@@ -185,7 +187,7 @@ cmd/eino-agent/main.go          ReAct 入口
 cmd/eino-agent-adk/main.go      ADK 入口
         │
         ├── internal/config      flag + env → Config
-        ├── internal/model       openai / claude / ark 适配器
+        ├── internal/model       openai / claude / ark 适配器 + usage 采集
         ├── internal/workspace   路径解析与工作区边界
         ├── internal/tools       6 个工具 + 错误软化 + 输出上限
         ├── internal/memory      .eino-agent/plan.md 工作记忆
@@ -193,8 +195,8 @@ cmd/eino-agent-adk/main.go      ADK 入口
         ├── internal/approval    bash 人工审批
         ├── internal/agent       Eino ReAct + system prompt + callbacks
         ├── internal/agentadk    Eino ADK ChatModelAgent + Runner + 事件渲染
-        ├── internal/contextmgr  确定性上下文压缩
-        ├── internal/session     JSON 快照
+        ├── internal/contextmgr  token 估算/校准 + 确定性上下文压缩
+        ├── internal/session     JSON 快照 + 结构化摘要
         └── internal/ui          终端渲染
 ```
 
@@ -256,7 +258,7 @@ go test ./...
 
 - 这是教学/演示向的简化实现，不是 Claude Code / Codex 的完整替代品；
 - 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引；
-- ReAct 分支只做确定性上下文压缩；ADK 分支摘要失败会降级为确定性压缩，但摘要本身仍有一次额外模型调用成本；
+- ReAct 分支自动压缩是确定性的，`/compact` 才会调用模型生成结构化摘要；ADK 分支摘要失败会降级为确定性压缩，但摘要本身仍有一次额外模型调用成本；
 - `bash` 超时依赖 `exec.CommandContext`，被杀的是 shell 进程本身，极端情况下子进程可能残留；
 - 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证；
 - ADK 版目前是单 agent 线性事件流，没有使用 ADK 的 multi-agent、checkpoint、interrupt/resume 能力；这些是后续可扩展点。

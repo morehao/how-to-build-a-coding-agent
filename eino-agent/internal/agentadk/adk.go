@@ -17,6 +17,7 @@ import (
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	contextsummary "github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/summary"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 )
 
@@ -27,6 +28,7 @@ type Config struct {
 	SystemPrompt  string
 	MaxSteps      int
 	ContextTokens int
+	Counter       *contextmgr.Counter
 	Stream        bool
 	UI            *ui.UI
 }
@@ -48,6 +50,9 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 	}
 	if cfg.ContextTokens <= 0 {
 		cfg.ContextTokens = contextmgr.DefaultContextTokens
+	}
+	if cfg.Counter == nil {
+		cfg.Counter = contextmgr.NewCounter()
 	}
 
 	toolNames, err := toolNames(ctx, cfg.Tools)
@@ -71,7 +76,10 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 		Trigger: &summarization.TriggerCondition{
 			ContextTokens: summaryTrigger,
 		},
-		UserInstruction: "Summarize this coding-agent conversation. Preserve the user's goals, decisions, file paths changed, commands run and their results, unresolved errors, and next steps. Drop raw tool output; keep only conclusions. Be concise.",
+		UserInstruction: contextsummary.StructuredInstruction,
+		TokenCounter: func(_ context.Context, input *summarization.TokenCounterInput) (int, error) {
+			return cfg.Counter.Count(input.Messages), nil
+		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create ADK summarization middleware: %w", err)
@@ -95,7 +103,7 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 		},
 		GenModelInput: func(_ context.Context, instruction string, input *adk.AgentInput) ([]*schema.Message, error) {
 			msgs := contextmgr.WithSystem(instruction, input.Messages)
-			msgs = contextmgr.Compact(msgs, cfg.ContextTokens)
+			msgs, _ = cfg.Counter.CompactWithStats(msgs, cfg.ContextTokens)
 			return msgs, nil
 		},
 	})

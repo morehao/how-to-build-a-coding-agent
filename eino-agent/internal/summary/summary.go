@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
@@ -67,9 +68,20 @@ func Generate(ctx context.Context, m einomodel.BaseModel[*schema.Message], histo
 	}
 	content := strings.TrimSpace(out.Content)
 	if len(content) > MaxBytes {
-		content = content[:MaxBytes] + "\n... [summary truncated]"
+		content = truncateUTF8(content, MaxBytes) + "\n... [summary truncated]"
 	}
 	return content, nil
+}
+
+func truncateUTF8(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.ValidString(s[:cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func renderTranscript(history []*schema.Message) string {

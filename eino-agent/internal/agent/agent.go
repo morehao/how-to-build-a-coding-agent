@@ -50,6 +50,9 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 	if cfg.MaxSteps <= 0 {
 		cfg.MaxSteps = 30
 	}
+	if cfg.Counter == nil {
+		cfg.Counter = contextmgr.NewCounter()
+	}
 
 	toolNames, err := toolNames(ctx, cfg.Tools)
 	if err != nil {

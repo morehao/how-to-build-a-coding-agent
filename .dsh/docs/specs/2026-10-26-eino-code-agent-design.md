@@ -68,7 +68,7 @@ Eino 已提供本方案需要的全部基础能力：
 | 编号 | 目标 | 可验证结果 |
 | --- | --- | --- |
 | G1 | 用 Eino ReAct 替代手写事件循环 | `internal/agent` 中不再出现 `for { model; tools }`；循环由 `react.Agent` 驱动 |
-| G2 | 5 个核心工具，schema 由 struct 推导 | `read_file`、`list_files`、`edit_file`、`bash`、`code_search`；每个都通过 `utils.InferTool` 注册 |
+| G2 | 6 个核心工具，schema 由 struct 推导 | `read_file`、`list_files`、`edit_file`、`bash`、`code_search`、`update_plan`；每个都通过 `utils.InferTool` 注册 |
 | G3 | 多轮 REPL + 流式输出 + 会话持久化 | 连续对话保持上下文；`--resume` 可恢复；流式逐块输出 |
 | G4 | 安全边界 | 路径越界、绝对路径、符号链接逃逸被拒绝；bash 默认需审批；`read-only` 模式禁止写和执行 |
 | G5 | 离线可测试 | 不依赖真实 API key 的单元测试 + 脚本化 fake model 集成测试；`go test ./...` 通过 |
@@ -131,7 +131,7 @@ Eino 已提供本方案需要的全部基础能力：
 
 ### 4.1 一句话
 
-在 `eino-agent/` 新 module 中，用 **Eino ReAct Agent** 作为唯一编排层，用 **`utils.InferTool` 定义 5 个受控工具**，外面套一层 **CLI + workspace jail + bash 审批 + JSON 会话**，形成「模型负责决策，Eino 负责循环，工具负责边界」的本地 code agent。
+在 `eino-agent/` 新 module 中，用 **Eino ReAct Agent** 作为唯一编排层，用 **`utils.InferTool` 定义 6 个受控工具**，外面套一层 **CLI + workspace jail + bash 审批 + JSON 会话**，形成「模型负责决策，Eino 负责循环，工具负责边界」的本地 code agent。
 
 ### 4.2 分层与职责
 
@@ -139,12 +139,15 @@ Eino 已提供本方案需要的全部基础能力：
 | --- | --- | --- | --- |
 | 入口 | `cmd/eino-agent` | 解析 flag、加载配置、组装依赖、REPL / one-shot | 业务逻辑 |
 | 配置 | `internal/config` | flag + env 合并、校验、默认值 | 读文件、调模型 |
-| 模型 | `internal/model` | 按 provider 构造 `model.ToolCallingChatModel` | 工具、会话 |
+| 模型 | `internal/model` | 按 provider 构造 `model.ToolCallingChatModel`；`usageModel` 采集 usage | 工具、会话 |
+| 上下文 | `internal/contextmgr` | token 估算/校准、单次输入压缩 | 跨轮持久化 |
 | 工作区 | `internal/workspace` | 根目录解析、路径 jail、忽略规则、文件读写 | 命令执行 |
 | 审批 | `internal/approval` | 终端 y/a/n、非 TTY 拒绝、read-only/yolo 策略 | 具体命令执行 |
-| 工具 | `internal/tools` | 5 个工具的实现与 Eino 注册 | 模型调用、循环控制 |
+| 工具 | `internal/tools` | 6 个工具的实现与 Eino 注册 | 模型调用、循环控制 |
 | Agent | `internal/agent` | 构造 `react.Agent`、system prompt、callbacks、单轮执行 | CLI 渲染 |
-| 会话 | `internal/session` | JSON 快照、恢复、原子写入、历史裁剪 | 模型上下文构造 |
+| 会话 | `internal/session` | JSON 快照、恢复、原子写入、历史裁剪、摘要存储 | 模型上下文构造 |
+| 记忆 | `internal/memory` | `.eino-agent/plan.md` 工作记忆 | 自动推断计划 |
+| 摘要 | `internal/summary` | 结构化摘要模板与生成 | 触发策略 |
 | UI | `internal/ui` | ANSI 颜色、流式输出、工具轨迹、错误展示 | 决策 |
 
 ### 4.3 目录结构
@@ -155,14 +158,17 @@ eino-agent/
 ├── go.sum
 ├── README.md
 ├── cmd/
-│   └── eino-agent/
-│       └── main.go              # flags + wiring + REPL
+│   ├── eino-agent/
+│   │   └── main.go              # ReAct flags + wiring + REPL
+│   └── eino-agent-adk/
+│       └── main.go              # ADK flags + wiring + REPL
 ├── internal/
 │   ├── config/
 │   │   ├── config.go            # flag/env 解析与校验
 │   │   └── config_test.go
 │   ├── model/
 │   │   ├── factory.go           # openai / claude / ark 预设
+│   │   ├── usage.go             # provider usage → token counter
 │   │   └── factory_test.go
 │   ├── workspace/
 │   │   ├── workspace.go         # root、Resolve、忽略规则
@@ -170,6 +176,15 @@ eino-agent/
 │   ├── approval/
 │   │   ├── approval.go          # Approver 接口 + 终端实现
 │   │   └── approval_test.go
+│   ├── contextmgr/
+│   │   ├── contextmgr.go        # token 估算/校准 + 压缩
+│   │   └── contextmgr_test.go
+│   ├── memory/
+│   │   ├── memory.go            # .eino-agent/plan.md
+│   │   └── memory_test.go
+│   ├── summary/
+│   │   ├── summary.go           # 结构化摘要
+│   │   └── summary_test.go
 │   ├── tools/
 │   │   ├── registry.go          # 组装 []tool.BaseTool
 │   │   ├── read.go
@@ -177,6 +192,7 @@ eino-agent/
 │   │   ├── edit.go
 │   │   ├── bash.go
 │   │   ├── search.go
+│   │   ├── plan.go              # update_plan
 │   │   └── *_test.go
 │   ├── agent/
 │   │   ├── agent.go             # react.NewAgent + 单轮 Generate/Stream
@@ -186,8 +202,11 @@ eino-agent/
 │   │   │   └── system.md        # //go:embed 的 system prompt
 │   │   └── agent_test.go        # scripted fake model 集成测试
 │   ├── session/
-│   │   ├── session.go           # JSON 快照
+│   │   ├── session.go           # JSON 快照 + summary
 │   │   └── session_test.go
+│   ├── agentadk/
+│   │   ├── adk.go               # ADK ChatModelAgent + Runner
+│   │   └── adk_test.go
 │   └── ui/
 │       └── ui.go                # 颜色、流式打印、工具轨迹
 ```
@@ -300,13 +319,13 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 
 **代价与边界**：Claude 适配器会拉入 Anthropic SDK、AWS/GCP 相关间接依赖，二进制会更大；如果体积不可接受，可去掉 Claude，仅保留 OpenAI 兼容（见开放问题 Q1）。OpenAI 兼容路径不承诺各家私有字段（如 reasoning、缓存）全部生效。
 
-### 5.3 工具层：`utils.InferTool` + 5 个显式工具
+### 5.3 工具层：`utils.InferTool` + 6 个显式工具
 
 **选择**：每个工具定义 `Input` struct（`jsonschema` tag 描述字段），用 `utils.InferTool[Input, string]` 生成 `tool.InvokableTool`，再放进 `compose.ToolsNodeConfig.Tools`。不使用 ADK filesystem middleware，原因是：
 
 1. workshop 的教学重点是「工具怎么定义、schema 怎么来、结果怎么回灌」，middleware 会把这层藏起来；
 2. 自定义工具更容易插入 workspace jail、bash 审批、输出上限；
-3. 我们希望保留现有工具名（`read_file` / `list_files` / `bash` / `edit_file` / `code_search`），让读者能直接对照旧版。
+3. 我们希望保留现有工具名（`read_file` / `list_files` / `bash` / `edit_file` / `code_search`），让读者能直接对照旧版；另加 `update_plan` 做持久化工作记忆。
 
 **工具契约**：
 
@@ -317,6 +336,7 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 | `edit_file` | `path`、`old_str`、`new_str` | 文件存在：`old_str` 必须在文件中**恰好出现一次**，替换一次；文件不存在：`old_str` 必须为空，创建文件并建父目录 | 原子写（同目录 temp + rename）；保留权限；不允许空 `old_str` 追加已有文件 | 未找到、匹配多次、`old_str == new_str`、越界 |
 | `bash` | `command` 必填；`timeout_seconds` 默认 120 | 在 workspace 根目录执行 `bash -c`；stdin 关闭；合并 stdout/stderr | 超时 ≤ 600 s；输出 ≤ 256 KiB；`TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat` | 非零退出码作为正常结果返回；超时/拒绝执行返回说明 |
 | `code_search` | `pattern` 必填；`path` 默认 `.`；`file_type`；`case_sensitive` 默认 false；`max_results` 默认 100 | 优先 `rg --line-number --no-heading --color=never`；无 `rg` 时用 Go regexp 遍历回退 | 结果 ≤ 500；单行 ≤ 300 字符；跳过二进制/忽略目录 | 无匹配（返回 `No matches found`）、非法正则、越界 |
+| `update_plan` | `content` 必填 | 原子替换工作区内的 `.eino-agent/plan.md`，作为跨轮工作记忆 | 总大小 ≤ 32 KiB；内容整体替换 | 超过大小、路径越界 |
 
 **为什么 `edit_file` 不再保留「空 `old_str` 追加」**：workshop 的实现里，空 `old_str` 对已存在文件表示追加（`edit_tool.go:437-440`）。对 code agent 来说，追加通常意味着模型没读到文件内容，容易造成重复代码。本方案把「空 `old_str`」限定为**仅创建新文件**；已存在文件必须提供唯一匹配片段。这是有意的行为改进，会在 README 与工具描述中写明。
 
@@ -369,8 +389,10 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 - 文件名：`<UTC 时间戳>-<6 位随机>.json`；`--resume` 接受完整路径或 session id。
 - 写入：每轮成功拿到最终 assistant 消息后，更新内存并**原子写**（temp + rename）。中途失败不追加 assistant，但工作区改动仍然保留（需在 README 说明）。
 - 加载：校验 `version`、role 只能是 `user/assistant`、workspace 存在；损坏文件报错并保留原文件，不静默覆盖。
-- 历史裁剪：会话保存前按字节估算总大小，超过 `--history-bytes`（默认 256 KiB）时从最旧的消息开始成对丢弃，保证第一条是 user；在 UI 上提示 `[history trimmed: N messages]`。跨轮历史不做 LLM 摘要。
-- 单轮上下文压缩：每次 ChatModel 调用前，`MessageModifier` 调用 `internal/contextmgr`，按 `--context-tokens`（默认 32000，近似 `bytes/3`）压缩输入：保留 system、最近 3 个 tool 结果和当前 user；旧 tool 结果替换为占位符；仍超预算则按 user turn 丢弃最旧块；最后才截断最大消息。`Config.ContextTokens` 为 0 时该层关闭（供测试/嵌入使用）；CLI 校验要求 >= 1024，避免误配出不可用的上下文。
+- 历史裁剪：会话保存前按字节估算总大小，超过 `--history-bytes`（默认 256 KiB）时从最旧的消息开始成对丢弃，保证第一条是 user；在 UI 上提示 `[history trimmed: N messages]`。
+- 跨轮摘要：session JSON 增加可选 `summary` 字段；`/compact` 调用模型生成结构化摘要（目标/决策/改动文件/命令结果/错误/下一步），替换旧历史并保留最近两条消息。`SchemaMessagesWithSummary` 把摘要作为 background 消息注入，保证角色序列对 provider 友好。
+- 单轮上下文压缩：每次 ChatModel 调用前，`MessageModifier` 调用 `internal/contextmgr`，按 `--context-tokens`（默认 32000）压缩输入：保留 system、最近 3 个 tool 结果和当前 user；旧 tool 结果替换为占位符；仍超预算则按 user turn 丢弃最旧块；最后才截断最大消息。`Config.ContextTokens` 为 0 时该层关闭（供测试/嵌入使用）；CLI 校验要求 >= 1024，避免误配出不可用的上下文。
+- token 计数：`internal/contextmgr.Counter` 以 `bytes/3` 为基线；`internal/model.usageModel` 包装 `ToolCallingChatModel`，在 Generate/Stream 响应带 `prompt_tokens` 时调用 `Observe`，用 EWMA 校准估算比例（限幅 [0.5, 2]）。这不是离线 tokenizer，但能跟随 provider 的实际计量。
 
 **为什么不在跨轮历史里保留 tool 消息**：ReAct 单轮内的 tool 调用/结果已经完成使命；跨轮保留会迅速膨胀上下文，而且旧的 tool 结果可能过期（文件已改）。代价是模型可能重复读同一个文件——这比上下文爆炸更可控。
 
@@ -382,7 +404,13 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 | Eino ADK checkpoint | 支持中断恢复、状态完整 | 与 ADK 绑定，格式不透明 | 首版不用 ADK |
 | 不持久化 | 最简单 | 关掉就丢，无法继续长任务 | 不满足「完整」 |
 
-### 5.6 Prompt：固定 system prompt + 仓库级 AGENT.md
+### 5.6 工作记忆与结构化摘要
+
+**工作记忆**：`internal/memory` 管理 `.eino-agent/plan.md`，模型通过 `update_plan` 整体替换，大小上限 32 KiB。每轮 CLI 用 `memory.HistoryMessage` 把它作为 background user 消息注入；它不依赖对话历史，因此上下文压缩或 session 恢复后仍然存在。`/plan` 只读展示。该文件在工作区内，用户可审查；不自动修改 `.gitignore`。
+
+**结构化摘要**：`internal/summary` 提供共享的 `StructuredInstruction` 和 `Generate`。ReAct 的 `/compact` 与 ADK 的 summarization middleware 使用同一组固定 section；手动 `/compact` 把摘要写入 session 并保留最近两条消息。摘要输入先经过 `contextmgr` 压缩，避免摘要器自身溢出。
+
+### 5.7 Prompt：固定 system prompt + 仓库级 AGENT.md
 
 **选择**：
 
@@ -393,7 +421,7 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 
 **为什么不用 Eino prompt template 组件**：首版 system prompt 是静态文本 + 一段项目说明，用标准库 `text/template` 足够；引入 `prompt.FromMessages` 会增加一层不必要的抽象。等需要多模板/变量时再迁移。
 
-### 5.7 CLI 与流式输出
+### 5.8 CLI 与流式输出
 
 **交互形态**：
 
@@ -403,7 +431,7 @@ eino-agent -p "修复 xxx"            # one-shot，打印结果后退出
 eino-agent --resume <id|path>      # 恢复会话后进入 REPL
 ```
 
-REPL 命令：`/help`、`/clear`（清空内存历史，不删会话文件）、`/session`（显示当前会话文件路径）、`/exit`。空行跳过。
+REPL 命令：`/help`、`/clear`（清空内存历史与摘要，不删会话文件）、`/compact`（结构化摘要并保留最近两条消息）、`/plan`（查看工作记忆）、`/session`（显示当前会话文件路径）、`/exit`。空行跳过。
 
 **流式**：默认 `Stream`，逐块打印 `msg.Content`；`--no-stream` 使用 `Generate` 一次性打印。流式失败（provider 不支持/网络中断）时提示用户加 `--no-stream` 重试，不自动重放（避免重复工具调用）。
 
@@ -420,7 +448,7 @@ REPL 命令：`/help`、`/clear`（清空内存历史，不删会话文件）、
 
 非 verbose 只显示一行摘要；`--verbose` 显示完整参数（截断 2 KiB）和结果头尾（各 1 KiB）。颜色在 `NO_COLOR` 或非 TTY 时关闭。
 
-### 5.8 错误处理与步数
+### 5.9 错误处理与步数
 
 | 场景 | 行为 |
 | --- | --- |
@@ -710,7 +738,7 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 | 依赖体积过大 | 二进制 > 60 MiB | 去掉 Claude 或用 build tag 拆分；见开放问题 Q1 | 低 |
 | 用户误用 yolo | 破坏性命令 | README 显著警告；默认 ask；不在 yolo 下自动 push | 高（用户可控） |
 | 搜索回退性能差 | 无 rg 的大仓库 | 结果上限 + 跳过忽略目录；verbose 提示安装 rg | 低 |
-| 设计过度 | 实现时间膨胀 | 固定 5 个工具；非目标清单；M0-M5 分阶段 | 中 |
+| 设计过度 | 实现时间膨胀 | 固定 6 个工具；非目标清单；M0-M5 分阶段 | 中 |
 
 ---
 
@@ -769,7 +797,9 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 | system prompt | `MessageModifier` | `ChatModelAgentConfig.Instruction` |
 | 工具循环 | ReAct 图内部 | ADK `Runner` 内部，`MaxIterations` 控制 |
 | 事件渲染 | Eino callbacks | 消费 `adk.AgentEvent`：assistant 流式事件逐块打印，tool 事件打印结果 |
-| 上下文 | `internal/contextmgr` 确定性压缩 | 额外加 ADK `summarization` middleware，摘要阈值取 `--context-tokens` 的 2/3 |
+| 上下文 | `internal/contextmgr` 确定性压缩 + `/compact` | 额外加 ADK `summarization` middleware，摘要阈值取 `--context-tokens` 的 2/3；摘要 instruction 复用 `internal/summary.StructuredInstruction` |
+| token 计数 | `usageModel` + `contextmgr.Counter` | 同左；summarization `TokenCounter` 也使用同一 counter |
+| 工作记忆 | `update_plan` + 每轮注入 | 同左 |
 | 会话/权限/工具 | 完全复用 | 完全复用 |
 
 实现约束：
@@ -777,7 +807,8 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 - `Runner.Run` 返回的迭代器必须消费到 `Next()` 返回 false，且 assistant 流事件要 `Close`；
 - ADK 的 `MaxIterations` 语义是模型生成轮数，与 ReAct 的图步数不完全等价，首版统一取 `--max-steps` 的值；
 - 工具业务错误仍然由 `internal/tools` 软化为 `ERROR: ...` 输出，ADK 图不会因文件不存在或用户拒绝命令而中断；
-- ADK 摘要触发后调用同一模型生成摘要，摘要 prompt 明确保留目标、改动文件、命令结果、错误和下一步；摘要失败时打印警告并退回 `GenModelInput` 的确定性压缩，不静默丢弃历史；
+- ADK 摘要触发后调用同一模型生成摘要，摘要 instruction 复用 `internal/summary` 的结构化模板，固定保留目标、决策、改动文件、命令结果、错误和下一步；摘要失败时打印警告并退回 `GenModelInput` 的确定性压缩，不静默丢弃历史；
+- ADK `summarization.Config.TokenCounter` 与 `GenModelInput` 共用 `contextmgr.Counter`，provider usage 校准后两个阈值保持一致；
 - `GenModelInput` 用 `internal/contextmgr` 做硬上限兜底，保证摘要未触发或摘要后仍超预算时输入不超过 `--context-tokens`；
 - ADK 的 multi-agent、checkpoint、interrupt/resume 未启用，留作后续扩展。
 
