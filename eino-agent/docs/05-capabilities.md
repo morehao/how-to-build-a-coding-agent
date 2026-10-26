@@ -115,9 +115,9 @@ ADK 分支在上面共享能力之外还有：
 - **summarization middleware**：上下文超过预算 2/3 时调模型摘要，失败退回确定性压缩；
 - **FileStore**：`internal/agentadk.FileStore` 实现 `adk.CheckPointStore`，checkpoint id 用 SHA-256 映射为文件名，避免路径逃逸；
 - **Runner checkpoint**：CLI 在 `.eino-agent/adk-checkpoints` 下保存 ADK 运行状态；`--no-checkpoints` 同时关闭文件 undo 和 Runner checkpoint；
-- **只读 ADK 子 agent**：`subagent.NewADKRunner` 用 ADK 运行时构造嵌套只读 runner，复用同一个 `task` 工具；同样接收只读 `skill` 工具和 64 KiB 报告上限。
+- **只读 ADK 子 agent**：`subagent.NewADKRunner` 用 ADK 运行时构造嵌套只读 runner，复用同一套 `task`/`tasks` 工具；同样接收只读 `skill` 工具、独立 token 预算和 64 KiB 报告上限。
 
-注意：Runner checkpoint 保存的是运行时状态，和 `/undo` 的文件快照不是一回事；当前 CLI 没有暴露 `/resume`，恢复 API 仍由 `agentadk.Agent`/ADK Runner 提供，适合在测试或后续迭代中接入。
+注意：Runner checkpoint 保存的是运行时状态，和 `/undo` 的文件快照不是一回事。CLI 的 `/resume` 恢复的是 **session 快照**，不是 Runner checkpoint；`Runner.Resume`/`ResumeWithParams` 仍是库能力，适合在测试或后续迭代中接入。
 
 ## 14. 优先级建议
 

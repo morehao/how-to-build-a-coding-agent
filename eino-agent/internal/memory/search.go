@@ -140,20 +140,21 @@ func match(text string, terms []string) (int, string) {
 	if first < 0 {
 		first = 0
 	}
-	start := first - 100
+	runes := []rune(text)
+	firstRune := len([]rune(text[:first]))
+	start := firstRune - 100
 	if start < 0 {
 		start = 0
 	}
-	end := first + 180
-	if end > len(text) {
-		end = len(text)
+	end := firstRune + 180
+	if end > len(runes) {
+		end = len(runes)
 	}
-	snippet := text[start:end]
-	snippet = strings.Join(strings.Fields(snippet), " ")
+	snippet := strings.Join(strings.Fields(string(runes[start:end])), " ")
 	if start > 0 {
 		snippet = "..." + snippet
 	}
-	if end < len(text) {
+	if end < len(runes) {
 		snippet += "..."
 	}
 	return score, snippet
