@@ -1,6 +1,6 @@
 # Eino Code Agent
 
-一个运行在本地终端里的简易 coding agent，基于字节跳动 [CloudWeGo Eino](https://github.com/cloudwego/eino) 的 ReAct 图实现。它可以读代码、列目录、搜索、改文件、跑命令，并把会话保存到本地。
+一个运行在本地终端里的简易 coding agent，基于字节跳动 [CloudWeGo Eino](https://github.com/cloudwego/eino) 实现。它可以读代码、列目录、搜索、改文件、跑命令，并把会话保存到本地。当前分支提供 **ReAct** 与 **ADK** 两个入口，共用同一套工具、工作区边界、审批和会话。
 
 这个目录是仓库根目录 workshop 代码之外的**独立 Go module**，不与根目录那些单文件示例共享 `package main`。根目录示例仍然按原样保留。
 
@@ -8,10 +8,10 @@
 
 | 分支 | 实现 | 特点 |
 | --- | --- | --- |
-| `feat/eino-code-agent` | Eino `flow/agent/react` | 轻量、直接、依赖少，当前分支 |
-| `feat/eino-code-agent-adk` | Eino `adk.ChatModelAgent` + `adk.Runner` | 在 ReAct 版基础上增加 ADK 运行时，保留 ReAct 命令用于对比 |
+| `feat/eino-code-agent` | Eino `flow/agent/react` | 轻量、直接、依赖少 |
+| `feat/eino-code-agent-adk` | Eino `adk.ChatModelAgent` + `adk.Runner` | 当前分支；在 ReAct 版基础上增加 ADK 运行时，同时保留 ReAct 命令用于对比 |
 
-ADK 分支从当前分支创建，因此公共的 config / workspace / tools / session / UI 完全复用，差异集中在 agent 运行时与入口命令。
+ADK 分支从 ReAct 分支创建，因此公共的 config / workspace / tools / session / UI 完全复用，差异集中在 agent 运行时与入口命令。
 
 ## 快速开始
 
@@ -19,26 +19,31 @@ ADK 分支从当前分支创建，因此公共的 config / workspace / tools / s
 
 ```bash
 cd eino-agent
+# ReAct 入口
 go build -o eino-agent ./cmd/eino-agent
+# ADK 入口（当前分支新增，ReAct 入口仍然保留）
+go build -o eino-agent-adk ./cmd/eino-agent-adk
 
 # OpenAI 或任意 OpenAI 兼容端点
 export OPENAI_API_KEY=sk-...
-./eino-agent --provider openai --model gpt-4o-mini --workspace /path/to/repo
+./eino-agent-adk --provider openai --model gpt-4o-mini --workspace /path/to/repo
 
 # Anthropic 原生接口
 export ANTHROPIC_API_KEY=sk-ant-...
-./eino-agent --provider claude --model <claude-model> --workspace /path/to/repo
+./eino-agent-adk --provider claude --model <claude-model> --workspace /path/to/repo
 
 # 火山方舟（Ark 的 OpenAI 兼容端点，model 填 endpoint id）
 export ARK_API_KEY=...
-./eino-agent --provider ark --model <endpoint-id> --workspace /path/to/repo
+./eino-agent-adk --provider ark --model <endpoint-id> --workspace /path/to/repo
 ```
 
-也可以直接运行：
+把 `./eino-agent-adk` 换成 `./eino-agent` 即为 ReAct 版本；两者参数完全一致。可以直接运行：
 
 ```bash
-go run ./cmd/eino-agent --provider openai --model gpt-4o-mini --workspace .
+go run ./cmd/eino-agent-adk --provider openai --model gpt-4o-mini --workspace .
 ```
+
+ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 
 单次执行：
 
@@ -132,7 +137,8 @@ go run ./cmd/eino-agent --provider openai --model gpt-4o-mini --workspace .
 ## 架构
 
 ```text
-cmd/eino-agent/main.go
+cmd/eino-agent/main.go          ReAct 入口
+cmd/eino-agent-adk/main.go      ADK 入口
         │
         ├── internal/config      flag + env → Config
         ├── internal/model       openai / claude / ark 适配器
@@ -140,11 +146,12 @@ cmd/eino-agent/main.go
         ├── internal/tools       5 个工具 + 错误软化 + 输出上限
         ├── internal/approval    bash 人工审批
         ├── internal/agent       Eino ReAct + system prompt + callbacks
+        ├── internal/agentadk    Eino ADK ChatModelAgent + Runner + 事件渲染
         ├── internal/session     JSON 快照
         └── internal/ui          终端渲染
 ```
 
-一轮对话的数据流：
+ReAct 路径的一轮对话：
 
 ```text
 user input
@@ -156,13 +163,26 @@ user input
   → persist user + assistant
 ```
 
+ADK 路径的一轮对话：
+
+```text
+user input
+  → session history + Instruction (ADK ChatModelAgent)
+  → adk.Runner.Run → AgentEvent 流
+      ├─ assistant 流式事件 → 终端
+      ├─ tool result 事件  → 终端
+      └─ 最后一个 assistant 消息 → 返回值
+  → persist user + assistant
+```
+
 几个实现要点：
 
-- `MaxStep = 30`，工具串行执行，未知工具通过 `UnknownToolsHandler` 返回可用工具列表；
-- 流式模式使用自定义 `StreamToolCallChecker`，会一直读到出现 tool call 或 EOF，兼容 Claude 这类先输出文本再发 tool call 的 provider；
-- system prompt 通过 `MessageModifier` 注入，保证每轮模型调用都以 system 开头；
+- 两个入口都是 `MaxStep / MaxIterations = 30`，工具串行执行，未知工具通过 `UnknownToolsHandler` 返回可用工具列表；
+- ReAct 流式模式使用自定义 `StreamToolCallChecker`，会一直读到出现 tool call 或 EOF，兼容 Claude 这类先输出文本再发 tool call 的 provider；
+- ADK 模式通过 `adk.NewRunner` 消费 `AgentEvent`，流式 assistant 事件逐块打印，tool 事件打印结果；`Runner` 必须消费到迭代器结束，否则事件流不完整；
+- system prompt 在 ReAct 中通过 `MessageModifier` 注入，在 ADK 中通过 `ChatModelAgentConfig.Instruction` 注入；
 - 自动读取工作区根目录第一个 `AGENTS.md` / `AGENT.md` / `CLAUDE.md`，最多 16 KiB，作为项目级补充说明；
-- 工具生命周期用 Eino callbacks 渲染，不在 agent 包里重写 ReAct 循环。
+- ReAct 工具生命周期用 Eino callbacks 渲染；ADK 直接用事件流渲染，避免重复。
 
 ## 开发与测试
 
@@ -176,6 +196,7 @@ go test ./...
 测试不需要 API key：
 
 - `internal/agent` 用一个脚本化的 fake `ToolCallingChatModel` 驱动**真实 ReAct 图 + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复；
+- `internal/agentadk` 用同一类 fake model 驱动**真实 ADK Runner + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复；
 - `internal/tools` 覆盖读、写、列目录、bash 审批/超时/截断、搜索 fallback；
 - `internal/workspace` 覆盖路径逃逸和 symlink 逃逸；
 - `internal/session` 覆盖保存、恢复、裁剪；
@@ -186,7 +207,8 @@ go test ./...
 - 这是教学/演示向的简化实现，不是 Claude Code / Codex 的完整替代品；
 - 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引、自动上下文压缩；
 - `bash` 超时依赖 `exec.CommandContext`，被杀的是 shell 进程本身，极端情况下子进程可能残留；
-- 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证。
+- 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证；
+- ADK 版目前是单 agent 线性事件流，没有使用 ADK 的 multi-agent、checkpoint、interrupt/resume 能力；这些是后续可扩展点。
 
 ## 设计文档
 

@@ -2,7 +2,7 @@
 
 > 状态块
 >
-> - **状态**：已实现（ReAct 分支），ADK 分支待落地
+> - **状态**：已实现（ReAct 分支 + ADK 分支）
 > - **作者**：AI Agent（与仓库 owner 协作）
 > - **评审人 / 拍板人**：仓库 owner（本仓库无线上调用方，不涉及跨团队评审）
 > - **最后更新**：2026-10-26
@@ -752,7 +752,29 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 - [x] 不适用的章节（数据库、部署拓扑、迁移）已删除，没有留 N/A。
 - [x] 未定项收口到第 12 节开放问题，并给默认倾向。
 - [x] 图使用 Mermaid 时序图（运行时序），未用 Mermaid 画静态架构图；结构用表格/目录树表达。
-- [ ] 待评审：Q1-Q5 的最终选择。
+- [x] 已评审：Q1-Q5 按默认倾向执行。
+
+---
+
+## 14. ADK 分支实现（增量）
+
+第二分支 `feat/eino-code-agent-adk` 从 `feat/eino-code-agent` 创建，保留 ReAct 入口，新增 ADK 入口，公共模块零改动。
+
+| 项 | ReAct 分支 | ADK 分支新增 |
+| --- | --- | --- |
+| 运行时 | `internal/agent`（`react.NewAgent`） | `internal/agentadk`（`adk.NewChatModelAgent` + `adk.NewRunner`） |
+| 入口 | `cmd/eino-agent` | 另加 `cmd/eino-agent-adk`，原入口保留 |
+| system prompt | `MessageModifier` | `ChatModelAgentConfig.Instruction` |
+| 工具循环 | ReAct 图内部 | ADK `Runner` 内部，`MaxIterations` 控制 |
+| 事件渲染 | Eino callbacks | 消费 `adk.AgentEvent`：assistant 流式事件逐块打印，tool 事件打印结果 |
+| 会话/权限/工具 | 完全复用 | 完全复用 |
+
+实现约束：
+
+- `Runner.Run` 返回的迭代器必须消费到 `Next()` 返回 false，且 assistant 流事件要 `Close`；
+- ADK 的 `MaxIterations` 语义是模型生成轮数，与 ReAct 的图步数不完全等价，首版统一取 `--max-steps` 的值；
+- 工具业务错误仍然由 `internal/tools` 软化为 `ERROR: ...` 输出，ADK 图不会因文件不存在或用户拒绝命令而中断；
+- ADK 的 multi-agent、checkpoint、interrupt/resume 未启用，留作后续扩展。
 
 ---
 
