@@ -1,5 +1,7 @@
 # 🧠 Build Your Own Coding Agent via a Step-by-Step Workshop
 
+**English** | [简体中文](README.zh-CN.md)
+
 Welcome! 👋 This workshop will guide you through building your own **AI-powered coding assistant** — starting from a basic chatbot, and adding powerful tools like file reading, shell command execution, and code searching.
 
 You don’t need to be an AI expert. Just follow along and build step-by-step!

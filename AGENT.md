@@ -1,5 +1,7 @@
 # Agent Instructions
 
+**English** | [简体中文](AGENT.zh-CN.md)
+
 ## Development Environment
 This project uses [devenv](https://devenv.sh/) for reproducible development environments with Nix.
 
