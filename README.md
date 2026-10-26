@@ -329,7 +329,7 @@ It adds the parts that make an agent usable beyond a demo:
 - retry/backoff and a session token budget;
 - sensitive-file and environment-variable policy;
 - JSONL trace, deterministic fake provider, and eval scenarios;
-- stdio MCP tools and a read-only `task` subagent.
+- stdio MCP tools, a read-only `task` subagent, and progressive-disclosure `SKILL.md` skills.
 
 ```bash
 cd eino-agent

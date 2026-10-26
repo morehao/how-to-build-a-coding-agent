@@ -139,3 +139,35 @@ func TestParseRejectsTooSmallContextBudget(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestParseSkillsDefaultsAndFlags(t *testing.T) {
+	base := map[string]string{
+		"OPENAI_API_KEY":       "sk",
+		"OPENAI_MODEL":         "m",
+		"EINO_AGENT_WORKSPACE": t.TempDir(),
+	}
+	cfg, err := Parse(nil, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsDir != "skills" || cfg.NoSkills {
+		t.Fatalf("skills defaults = %q/%v", cfg.SkillsDir, cfg.NoSkills)
+	}
+
+	base["EINO_AGENT_SKILLS_DIR"] = "team-skills"
+	cfg, err = Parse(nil, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsDir != "team-skills" {
+		t.Fatalf("skills env = %q", cfg.SkillsDir)
+	}
+
+	cfg, err = Parse([]string{"--skills-dir", "custom", "--no-skills"}, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SkillsDir != "custom" || !cfg.NoSkills {
+		t.Fatalf("skills flags = %q/%v", cfg.SkillsDir, cfg.NoSkills)
+	}
+}

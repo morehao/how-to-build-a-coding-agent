@@ -325,7 +325,7 @@ hello          # 问候脚本
 - 重试/退避和 session 级 token 预算；
 - 敏感文件与环境变量策略；
 - JSONL trace、确定性 fake provider、eval 场景；
-- stdio MCP 工具和只读 `task` 子 agent。
+- stdio MCP 工具、只读 `task` 子 agent，以及渐进式披露的 `SKILL.md` 技能。
 
 ```bash
 cd eino-agent

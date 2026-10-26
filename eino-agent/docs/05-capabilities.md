@@ -82,15 +82,25 @@
 
 **边界**：MCP server 是独立进程，拥有自己的权限；agent 只能控制是否调用，不能限制 server 内部行为。配置和环境变量要当作可信代码审查。
 
-## 10. 子 agent（task）
+## 10. Skill（`SKILL.md`）
+
+**问题**：团队流程和领域知识很长，全部塞进 system prompt 会挤占上下文；写成 Go 工具又太重。
+
+**实现**：`internal/skill` 扫描工作区 `skills/*/SKILL.md`，只把 name/description 注入 prompt；模型调用 `skill` 工具时才加载正文。支持 `context: inline` 与 `context: fork`，后者用只读子 agent 执行。详见 [skills.md](skills.md)。
+
+**用法**：`--skills-dir` 改目录，`--no-skills` 关闭。
+
+**边界**：不扫描嵌套目录、不支持热加载、不支持 `fork_with_context`、没有 skill 级工具白名单；`agent`/`model` 字段预留但不生效。Skill 正文是仓库内容，不能覆盖安全规则或获得额外权限。
+
+## 11. 子 agent（task）
 
 **问题**：父 agent 做大型调查时，读文件会把主上下文淹没。
 
-**实现**：`internal/subagent` 构造只读嵌套 ReAct runner，暴露 `task` 工具；子 agent 工具集只有 `read_file`/`list_files`/`code_search`/`repo_map`，不能再调用 `task`。
+**实现**：`internal/subagent` 构造只读嵌套 ReAct runner，暴露 `task` 工具；子 agent 工具集只有 `read_file`/`list_files`/`code_search`/`repo_map`，可额外拿到只读 `skill` 工具；不能再调用 `task`。子 agent 有 2 分钟默认超时和 64 KiB 报告上限。
 
-**边界**：没有并行子 agent；没有独立模型/预算；子 agent 的输出会回到父上下文，仍可能很长。
+**边界**：没有并行子 agent；没有独立模型/独立 token 预算；报告被截断后父 agent 需要自己补读关键文件。
 
-## 11. 项目指令 `@import`
+## 12. 项目指令 `@import`
 
 **问题**：根 `AGENTS.md` 很长，或子目录有独立规则。
 
@@ -98,12 +108,12 @@
 
 **边界**：只展开显式 import，不自动发现子目录 `AGENTS.md`；总大小 16 KiB。
 
-## 12. 优先级建议
+## 13. 优先级建议
 
 如果继续迭代，建议顺序：
 
 1. 真实 provider 的集成 smoke test（可选 nightly）；
-2. apply_patch 的模糊定位/失败重试提示；
-3. 子 agent 的独立 token 预算与并行；
+2. 子 agent 的并行 fan-out、独立 token 预算与结构化报告；
+3. skill 的热加载、skill 级工具白名单、ADK `AgentHub`/`fork_with_context`；
 4. 更完整的 `.einoignore`/gitignore 语义；
 5. trace 的 HTML viewer 或 `jq` 配方。
