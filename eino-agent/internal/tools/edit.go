@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/approval"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
@@ -18,7 +19,7 @@ type editFileInput struct {
 	NewStr string `json:"new_str" jsonschema_description:"Replacement text, or the full content when creating a new file."`
 }
 
-func (o *Options) editFile(_ context.Context, in editFileInput) (string, error) {
+func (o *Options) editFile(ctx context.Context, in editFileInput) (string, error) {
 	if o.Mode == config.PermissionReadOnly {
 		return "", errors.New("edit_file is disabled in read-only mode")
 	}
@@ -54,6 +55,9 @@ func (o *Options) editFile(_ context.Context, in editFileInput) (string, error) 
 			return "", fmt.Errorf("old_str occurs %d times in %s; include more surrounding context to make it unique", count, rel)
 		}
 		updated := strings.Replace(string(content), in.OldStr, in.NewStr, 1)
+		if err := approveEdit(ctx, o, rel, string(content), updated, in.OldStr, in.NewStr, false); err != nil {
+			return "", err
+		}
 		if err := workspace.WriteFileAtomic(path, []byte(updated), info.Mode()); err != nil {
 			return "", fmt.Errorf("write %s: %w", rel, err)
 		}
@@ -63,6 +67,9 @@ func (o *Options) editFile(_ context.Context, in editFileInput) (string, error) 
 		if in.OldStr != "" {
 			return "", fmt.Errorf("%s does not exist; set old_str to \"\" to create it", rel)
 		}
+		if err := approveEdit(ctx, o, rel, "", in.NewStr, "", in.NewStr, true); err != nil {
+			return "", err
+		}
 		if err := workspace.WriteFileAtomic(path, []byte(in.NewStr), 0o644); err != nil {
 			return "", fmt.Errorf("create %s: %w", rel, err)
 		}
@@ -71,4 +78,28 @@ func (o *Options) editFile(_ context.Context, in editFileInput) (string, error) 
 	default:
 		return "", fmt.Errorf("stat %s: %w", rel, statErr)
 	}
+}
+
+func approveEdit(ctx context.Context, o *Options, rel, oldContent, newContent, oldStr, newStr string, create bool) error {
+	if o.Approver == nil {
+		return errors.New("edit denied: no approver configured")
+	}
+	summary := fmt.Sprintf("%d line(s) removed, %d line(s) added", len(splitDiffLines(oldStr)), len(splitDiffLines(newStr)))
+	if create {
+		summary = fmt.Sprintf("create file, %d line(s)", len(splitDiffLines(newStr)))
+	}
+	decision, err := o.Approver.Approve(ctx, approval.Request{
+		Kind:    approval.KindEdit,
+		Tool:    "edit_file",
+		Path:    rel,
+		Diff:    unifiedDiff(rel, oldContent, newContent, oldStr, newStr),
+		Summary: summary,
+	})
+	if err != nil {
+		return fmt.Errorf("approval failed: %w", err)
+	}
+	if decision == approval.Deny {
+		return errors.New("edit denied by user")
+	}
+	return nil
 }

@@ -1,4 +1,5 @@
-// Package approval implements the human-in-the-loop gate for shell commands.
+// Package approval implements the human-in-the-loop gate for privileged
+// actions, currently shell commands and file edits.
 package approval
 
 import (
@@ -19,17 +20,34 @@ import (
 type Decision int
 
 const (
-	// Deny rejects the command for this invocation.
+	// Deny rejects the action for this invocation.
 	Deny Decision = iota
-	// Once allows the command for this invocation only.
+	// Once allows the action for this invocation only.
 	Once
-	// Always allows the same command for the rest of the process.
+	// Always allows the same command or edit target for the rest of the
+	// process.
 	Always
 )
 
-// Request describes a shell command awaiting approval.
+// Kind identifies the kind of privileged action.
+type Kind string
+
+const (
+	// KindBash is a shell command. It is also the zero-value kind for
+	// backwards compatibility with callers that only set Command.
+	KindBash Kind = "bash"
+	// KindEdit is a file edit or creation.
+	KindEdit Kind = "edit"
+)
+
+// Request describes a privileged action awaiting approval.
 type Request struct {
+	Kind    Kind
+	Tool    string
 	Command string
+	Path    string
+	Diff    string
+	Summary string
 	CWD     string
 	Timeout time.Duration
 }
@@ -65,20 +83,24 @@ func (t *Terminal) Approve(ctx context.Context, req Request) (Decision, error) {
 	if err := ctx.Err(); err != nil {
 		return Deny, err
 	}
+	kind := req.Kind
+	if kind == "" {
+		kind = KindBash
+	}
 	switch t.mode {
 	case config.PermissionYolo:
 		return Once, nil
 	case config.PermissionReadOnly:
-		fmt.Fprintln(t.out, "[approval] denied: bash is disabled in read-only mode")
+		fmt.Fprintf(t.out, "[approval] denied %s: privileged actions are disabled in read-only mode\n", kind)
 		return Deny, nil
 	}
 
 	if !t.isTTY {
-		fmt.Fprintln(t.out, "[approval] denied: non-interactive session; use --permission-mode yolo to allow bash")
+		fmt.Fprintf(t.out, "[approval] denied %s: non-interactive session; privileged actions require a TTY or --permission-mode yolo\n", kind)
 		return Deny, nil
 	}
 
-	key := commandKey(req.Command)
+	key := requestKey(kind, req)
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -86,10 +108,13 @@ func (t *Terminal) Approve(ctx context.Context, req Request) (Decision, error) {
 		return Always, nil
 	}
 
-	fmt.Fprintf(t.out, "\n[approval] bash\n  command: %s\n  cwd:     %s\n  timeout: %s\n",
-		truncate(req.Command, 500), req.CWD, req.Timeout)
+	printRequest(t.out, kind, req)
 	for attempt := 0; attempt < 3; attempt++ {
-		fmt.Fprint(t.out, "  allow? [y] once / [a] always this command / [N] no: ")
+		prompt := "  allow? [y] once / [a] always this command / [N] no: "
+		if kind == KindEdit {
+			prompt = "  apply? [y] once / [a] always this file / [N] no: "
+		}
+		fmt.Fprint(t.out, prompt)
 		line, err := t.in.ReadString('\n')
 		if err != nil && strings.TrimSpace(line) == "" {
 			fmt.Fprintln(t.out)
@@ -110,9 +135,29 @@ func (t *Terminal) Approve(ctx context.Context, req Request) (Decision, error) {
 	return Deny, nil
 }
 
-func commandKey(cmd string) string {
-	sum := sha256.Sum256([]byte(cmd))
-	return hex.EncodeToString(sum[:])
+func printRequest(out io.Writer, kind Kind, req Request) {
+	switch kind {
+	case KindEdit:
+		fmt.Fprintf(out, "\n[approval] %s\n  path: %s\n", req.Tool, req.Path)
+		if req.Summary != "" {
+			fmt.Fprintf(out, "  change: %s\n", req.Summary)
+		}
+		if req.Diff != "" {
+			fmt.Fprintf(out, "%s\n", truncate(req.Diff, 12*1024))
+		}
+	default:
+		fmt.Fprintf(out, "\n[approval] %s\n  command: %s\n  cwd:     %s\n  timeout: %s\n",
+			"bash", truncate(req.Command, 500), req.CWD, req.Timeout)
+	}
+}
+
+func requestKey(kind Kind, req Request) string {
+	if kind == KindEdit {
+		sum := sha256.Sum256([]byte(req.Path))
+		return "edit:" + hex.EncodeToString(sum[:])
+	}
+	sum := sha256.Sum256([]byte(req.Command))
+	return "bash:" + hex.EncodeToString(sum[:])
 }
 
 func truncate(s string, max int) string {

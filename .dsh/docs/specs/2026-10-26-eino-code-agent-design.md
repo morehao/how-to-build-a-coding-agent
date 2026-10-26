@@ -70,7 +70,7 @@ Eino 已提供本方案需要的全部基础能力：
 | G1 | 用 Eino ReAct 替代手写事件循环 | `internal/agent` 中不再出现 `for { model; tools }`；循环由 `react.Agent` 驱动 |
 | G2 | 6 个核心工具，schema 由 struct 推导 | `read_file`、`list_files`、`edit_file`、`bash`、`code_search`、`update_plan`；每个都通过 `utils.InferTool` 注册 |
 | G3 | 多轮 REPL + 流式输出 + 会话持久化 | 连续对话保持上下文；`--resume` 可恢复；流式逐块输出 |
-| G4 | 安全边界 | 路径越界、绝对路径、符号链接逃逸被拒绝；bash 默认需审批；`read-only` 模式禁止写和执行 |
+| G4 | 安全边界 | 路径越界、绝对路径、符号链接逃逸被拒绝；bash/edit 默认需审批；`read-only` 模式禁止写和执行 |
 | G5 | 离线可测试 | 不依赖真实 API key 的单元测试 + 脚本化 fake model 集成测试；`go test ./...` 通过 |
 | G6 | 可维护的工程结构 | 独立 `eino-agent/go.mod`；按 config/model/workspace/tools/agent/session/ui 分包；根目录 workshop 文件零改动 |
 
@@ -142,7 +142,7 @@ Eino 已提供本方案需要的全部基础能力：
 | 模型 | `internal/model` | 按 provider 构造 `model.ToolCallingChatModel`；`usageModel` 采集 usage | 工具、会话 |
 | 上下文 | `internal/contextmgr` | token 估算/校准、单次输入压缩 | 跨轮持久化 |
 | 工作区 | `internal/workspace` | 根目录解析、路径 jail、忽略规则、文件读写 | 命令执行 |
-| 审批 | `internal/approval` | 终端 y/a/n、非 TTY 拒绝、read-only/yolo 策略 | 具体命令执行 |
+| 审批 | `internal/approval` | 终端 y/a/n、edit diff、非 TTY 拒绝、read-only/yolo 策略 | 具体命令执行 |
 | 工具 | `internal/tools` | 6 个工具的实现与 Eino 注册 | 模型调用、循环控制 |
 | Agent | `internal/agent` | 构造 `react.Agent`、system prompt、callbacks、单轮执行 | CLI 渲染 |
 | 会话 | `internal/session` | JSON 快照、恢复、原子写入、历史裁剪、摘要存储 | 模型上下文构造 |
@@ -359,15 +359,16 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 | 操作 | `read-only` | `ask`（默认） | `yolo` |
 | --- | --- | --- | --- |
 | read/list/search | 允许 | 允许 | 允许 |
-| edit_file | 拒绝 | 允许 | 允许 |
+| edit_file | 拒绝 | 逐次询问 + diff | 允许 |
 | bash | 拒绝 | 逐条询问 | 允许 |
 | session 写入 | 允许 | 允许 | 允许 |
 
-3. **bash 审批**：默认 `ask`。终端提示展示命令、cwd、超时，选项 `[y] 本次 / [a] 本会话内同一命令总是允许 / [N] 拒绝`。`a` 只在当前进程内记住命令字符串的 SHA-256，不落盘。
-4. **非 TTY**：`-p` one-shot 或 stdin 不是终端时，`ask` 模式下的 bash 直接拒绝，避免脚本挂起；用户需显式 `--permission-mode yolo`。
-5. **执行约束**：`cmd.Dir = workspace root`；`cmd.Stdin = nil`（读 `/dev/null`，防止交互式命令卡住）；`cmd.Env = os.Environ()` 加 `TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`；`exec.CommandContext` + 超时；输出用 head/tail 双端缓冲，超过 256 KiB 时保留头尾并标注 `[output truncated]`。
-6. **写文件**：同目录创建临时文件（`os.CreateTemp(dir, ".eino-edit-*")`），写入后 `Chmod` 保留原权限，`Rename` 原子替换；失败时清理临时文件。
-7. **不自动执行仓库内容**：`AGENTS.md`/`AGENT.md` 只作为文本注入 system prompt，不执行其中的命令；工具结果也视为数据，不作为指令。
+3. **edit 审批**：默认 `ask`。`edit_file` 在写盘前生成 unified diff，展示路径、变更摘要和 diff；选项 `[y] 本次 / [a] 本进程内同一路径总是允许 / [N] 拒绝`。`a` 以路径为 key，只在当前进程内记忆，不落盘；非 TTY 下同样拒绝。
+4. **bash 审批**：默认 `ask`。终端提示展示命令、cwd、超时，选项 `[y] 本次 / [a] 本会话内同一命令总是允许 / [N] 拒绝`。`a` 只在当前进程内记住命令字符串的 SHA-256，不落盘。
+5. **非 TTY**：`-p` one-shot 或 stdin 不是终端时，`ask` 模式下的 bash 和 edit 都直接拒绝，避免脚本挂起或静默写文件；用户需显式 `--permission-mode yolo`。
+6. **执行约束**：`cmd.Dir = workspace root`；`cmd.Stdin = nil`（读 `/dev/null`，防止交互式命令卡住）；`cmd.Env = os.Environ()` 加 `TERM=dumb`、`PAGER=cat`、`GIT_PAGER=cat`；`exec.CommandContext` + 超时；输出用 head/tail 双端缓冲，超过 256 KiB 时保留头尾并标注 `[output truncated]`。
+7. **写文件**：同目录创建临时文件（`os.CreateTemp(dir, ".eino-edit-*")`），写入后 `Chmod` 保留原权限，`Rename` 原子替换；失败时清理临时文件。
+8. **不自动执行仓库内容**：`AGENTS.md`/`AGENT.md` 只作为文本注入 system prompt，不执行其中的命令；工具结果也视为数据，不作为指令。
 
 **备选**：
 
@@ -378,7 +379,7 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 | 容器沙箱 | 强隔离 | 需要 Docker/OS 支持、路径映射、网络策略 | 首版过重；作为后续增强 |
 | 命令黑名单 | 简单 | 绕过方式太多，容易给虚假安全感 | 不如审批 + 路径 jail 实在 |
 
-**残余风险**（明确记录）：`yolo` 模式等于把终端交给模型；bash 继承用户环境变量，`env` 可能把密钥打印给模型；workspace 内的 `.env` 可被 `read_file` 读取。首版通过「默认 ask + 不自动 push」降低风险，不承诺防御恶意模型。若需要更强隔离，后续加容器后端。
+**残余风险**（明确记录）：`yolo` 模式等于把终端交给模型；bash 继承用户环境变量，`env` 可能把密钥打印给模型；workspace 内的 `.env` 可被 `read_file` 读取。`ask` 下 edit 的审批按路径记忆，用户选择 `a` 后该路径的后续改动不再询问；首版通过「默认 ask + diff 审批 + 不自动 push」降低风险，不承诺防御恶意模型。若需要更强隔离，后续加容器后端。
 
 ### 5.5 会话与历史：JSON 快照 + 最近消息裁剪
 
@@ -676,7 +677,7 @@ go run ./cmd/eino-agent --help
 1. 不设置任何 API key 时，`--help` 正常，启动交互会给出清晰错误（退出码 2），不会 panic。
 2. 集成测试不依赖网络，覆盖至少一次完整 ReAct tool loop。
 3. `read-only` 模式下 `edit_file` / `bash` 被拒绝。
-4. `ask` 模式下非 TTY 的 bash 被拒绝，不挂起。
+4. `ask` 模式下非 TTY 的 bash 和 edit 都被拒绝，不挂起、不静默写文件。
 5. `--resume` 能恢复上一轮 user/assistant 历史。
 6. 根目录现有 6 个 workshop 文件未被修改；`git diff --stat` 只包含 `eino-agent/` 与 `.dsh/docs/`。
 
@@ -734,7 +735,7 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 | 工具并发导致审批交错 | 多个 bash 同时弹提示 | `ExecuteSequentially: true` + approver mutex | 低 |
 | 上下文溢出 | 模型报 context length | 单轮确定性压缩 + 历史裁剪 + 单工具输出上限；提示用户调小 `--context-tokens` 或 `/clear` | 低 |
 | 模型不遵守 edit 约束 | 多次匹配、空 old_str | 工具返回可读错误；prompt 明确「先读后改」 | 中 |
-| 审批体验太烦 | 用户频繁输入 y | 同命令本会话记住 `a`；`--permission-mode yolo` 显式开关 | 低 |
+| 审批体验太烦 | 用户频繁输入 y | bash 同命令 / edit 同路径记住 `a`；`--permission-mode yolo` 显式开关 | 低 |
 | 依赖体积过大 | 二进制 > 60 MiB | 去掉 Claude 或用 build tag 拆分；见开放问题 Q1 | 低 |
 | 用户误用 yolo | 破坏性命令 | README 显著警告；默认 ask；不在 yolo 下自动 push | 高（用户可控） |
 | 搜索回退性能差 | 无 rg 的大仓库 | 结果上限 + 跳过忽略目录；verbose 提示安装 rg | 低 |

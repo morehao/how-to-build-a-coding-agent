@@ -41,6 +41,8 @@ func (o *Options) bash(ctx context.Context, in bashInput) (string, error) {
 		return "", errors.New("command denied: no approver configured")
 	}
 	decision, err := o.Approver.Approve(ctx, approval.Request{
+		Kind:    approval.KindBash,
+		Tool:    "bash",
 		Command: command,
 		CWD:     o.Workspace.Root(),
 		Timeout: timeout,
