@@ -209,3 +209,24 @@ func TestToolOutputCap(t *testing.T) {
 		t.Fatalf("out length=%d: %q", len(out), out)
 	}
 }
+
+func TestWithoutRunnerDisablesFork(t *testing.T) {
+	root := t.TempDir()
+	ws, err := workspace.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeSkill(t, root, "forked", "---\nname: forked\ndescription: fork\ncontext: fork\n---\nbody\n")
+	parent, err := NewTool(ToolOptions{Backend: mustBackend(t, ws), Runner: &fakeRunner{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nested := parent.WithoutRunner()
+	out, err := nested.InvokableRun(context.Background(), `{"name":"forked"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "requires a subagent runner") {
+		t.Fatalf("out = %q", out)
+	}
+}

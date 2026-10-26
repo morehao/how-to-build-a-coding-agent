@@ -297,6 +297,15 @@ var _ tool.InvokableTool = (*Tool)(nil)
 // context: fork. Call it during startup, before the agent starts running.
 func (t *Tool) SetRunner(r Runner) { t.runner = r }
 
+// WithoutRunner returns a shallow copy with fork execution disabled. Pass this
+// copy to a nested agent so a forked skill cannot recursively invoke its own
+// subagent.
+func (t *Tool) WithoutRunner() *Tool {
+	c := *t
+	c.runner = nil
+	return &c
+}
+
 // Info implements tool.BaseTool.
 func (t *Tool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 	defs, err := t.backend.List(ctx)

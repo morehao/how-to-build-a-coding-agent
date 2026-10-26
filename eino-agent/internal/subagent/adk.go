@@ -22,7 +22,9 @@ import (
 // ADKRunner is a read-only nested ADK agent used by the task tool on the ADK
 // branch.
 type ADKRunner struct {
-	agent *agentadk.Agent
+	agent          *agentadk.Agent
+	timeout        time.Duration
+	maxResultBytes int
 }
 
 // NewADKRunner creates a read-only nested ADK runner.
@@ -41,6 +43,12 @@ func NewADKRunner(ctx context.Context, cfg Config) (*ADKRunner, error) {
 	}
 	if cfg.ContextTokens <= 0 {
 		cfg.ContextTokens = 20000
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 2 * time.Minute
+	}
+	if cfg.MaxResultBytes <= 0 {
+		cfg.MaxResultBytes = 64 * 1024
 	}
 	all, err := tools.New(ctx, tools.Options{
 		Workspace:      cfg.Workspace,
@@ -67,6 +75,12 @@ func NewADKRunner(ctx context.Context, cfg Config) (*ADKRunner, error) {
 		nestedTools = append(nestedTools, t)
 		names = append(names, info.Name)
 	}
+	if cfg.SkillTool != nil {
+		if info, infoErr := cfg.SkillTool.Info(ctx); infoErr == nil && info != nil {
+			nestedTools = append(nestedTools, cfg.SkillTool)
+			names = append(names, info.Name)
+		}
+	}
 	if len(nestedTools) == 0 {
 		return nil, errors.New("subagent: no read-only tools available")
 	}
@@ -74,6 +88,7 @@ func NewADKRunner(ctx context.Context, cfg Config) (*ADKRunner, error) {
 	if err != nil {
 		return nil, err
 	}
+	prompt += cfg.SkillPrompt
 	prompt += "\n\nYou are a read-only subagent. Investigate the task and report concise findings. " +
 		"You cannot edit files, run bash, or delegate further. Available tools: " + strings.Join(names, ", ") + "."
 	silent := ui.New(io.Discard, io.Discard, false, false)
@@ -91,13 +106,18 @@ func NewADKRunner(ctx context.Context, cfg Config) (*ADKRunner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("subagent agent: %w", err)
 	}
-	return &ADKRunner{agent: nested}, nil
+	return &ADKRunner{agent: nested, timeout: cfg.Timeout, maxResultBytes: cfg.MaxResultBytes}, nil
 }
 
 func (r *ADKRunner) Run(ctx context.Context, prompt string) (string, error) {
 	prompt = strings.TrimSpace(prompt)
 	if prompt == "" {
 		return "", errors.New("subagent: empty task")
+	}
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
 	}
 	final, err := r.agent.RunTurn(ctx, []*schema.Message{schema.UserMessage(prompt)})
 	if err != nil {
@@ -106,5 +126,5 @@ func (r *ADKRunner) Run(ctx context.Context, prompt string) (string, error) {
 	if final == nil {
 		return "", errors.New("subagent: empty final message")
 	}
-	return final.Content, nil
+	return truncateUTF8(final.Content, r.maxResultBytes), nil
 }

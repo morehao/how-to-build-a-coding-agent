@@ -105,6 +105,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		return 1
 	}
 	var skillTool tool.BaseTool
+	var nestedSkillTool tool.BaseTool
 	var skillPrompt string
 	if !cfg.NoSkills {
 		skillsBackend, skillErr := skill.NewFilesystemBackend(ws, []string{cfg.SkillsDir})
@@ -118,6 +119,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 				u.Warn("warning: skills disabled: %v", toolErr)
 			} else {
 				skillTool = st
+				nestedSkillTool = st.WithoutRunner()
 				skillPrompt = skill.PromptSection(defs)
 				toolList = append(toolList, skillTool)
 				u.Verbosef("skills: %d loaded from %s", len(defs), cfg.SkillsDir)
@@ -160,7 +162,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		Model:       chatModel,
 		Trace:       rec,
 		MaxSteps:    6,
-		SkillTool:   skillTool,
+		SkillTool:   nestedSkillTool,
 		SkillPrompt: skillPrompt,
 	})
 	if err != nil {
