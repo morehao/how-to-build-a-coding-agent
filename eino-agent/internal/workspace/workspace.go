@@ -104,8 +104,8 @@ func IsIgnoredDir(name string) bool {
 }
 
 // IsIgnoredRel reports whether a workspace-relative path is ignored. The
-// ".dsh/tmp" prefix is special-cased because .dsh also contains docs the agent
-// may legitimately read.
+// ".dsh/tmp" prefix is special-cased: it is local scratch space (module
+// caches, captured traces) that must never be traversed.
 func IsIgnoredRel(rel string) bool {
 	rel = filepath.ToSlash(strings.TrimPrefix(rel, "./"))
 	if rel == ".dsh/tmp" || strings.HasPrefix(rel, ".dsh/tmp/") {

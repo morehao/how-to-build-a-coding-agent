@@ -81,7 +81,7 @@ func TestIsIgnoredRel(t *testing.T) {
 			t.Errorf("IsIgnoredRel(%q) = false, want true", p)
 		}
 	}
-	for _, p := range []string{"src/main.go", ".dsh/docs/specs/a.md", "README.md"} {
+	for _, p := range []string{"src/main.go", "docs/specs/a.md", "README.md"} {
 		if IsIgnoredRel(p) {
 			t.Errorf("IsIgnoredRel(%q) = true, want false", p)
 		}

@@ -372,5 +372,5 @@ docs/mcp.md                    MCP 接入
 ## 设计文档
 
 ```text
-../.dsh/docs/specs/2026-10-26-eino-code-agent-design.md
+../docs/2026-10-26-eino-code-agent-design.md
 ```
