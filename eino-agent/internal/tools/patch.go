@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -93,6 +94,9 @@ func (o *Options) applyPatch(ctx context.Context, in applyPatchInput) (string, e
 		next, err := patch.Apply(old, fp)
 		if err != nil {
 			return "", err
+		}
+		if bytes.IndexByte([]byte(next), 0) >= 0 {
+			return "", fmt.Errorf("%s: patch result appears to be binary; apply_patch only supports UTF-8 text", rel)
 		}
 		changes = append(changes, patchChange{abs: abs, rel: rel, next: next, delete: fp.DeleteFile, mode: mode})
 	}

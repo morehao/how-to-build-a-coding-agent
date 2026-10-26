@@ -162,11 +162,11 @@ func (g *gatedTool) Info(ctx context.Context) (*schema.ToolInfo, error) {
 
 func (g *gatedTool) InvokableRun(ctx context.Context, argumentsInJSON string, opts ...tool.Option) (string, error) {
 	if g.mode == config.PermissionReadOnly {
-		return "", errors.New("MCP tools are disabled in read-only mode")
+		return "ERROR: MCP tools are disabled in read-only mode", nil
 	}
 	if g.mode != config.PermissionYolo {
 		if g.approver == nil {
-			return "", errors.New("MCP tool denied: no approver configured")
+			return "ERROR: MCP tool denied: no approver configured", nil
 		}
 		info, err := g.Info(ctx)
 		name := g.server
@@ -179,13 +179,23 @@ func (g *gatedTool) InvokableRun(ctx context.Context, argumentsInJSON string, op
 			Args: argumentsInJSON,
 		})
 		if err != nil {
-			return "", fmt.Errorf("MCP approval failed: %w", err)
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			return "ERROR: MCP approval failed: " + err.Error(), nil
 		}
 		if decision == approval.Deny {
-			return "", errors.New("MCP tool denied by user")
+			return "ERROR: MCP tool denied by user", nil
 		}
 	}
-	return g.invoke.InvokableRun(ctx, argumentsInJSON, opts...)
+	out, err := g.invoke.InvokableRun(ctx, argumentsInJSON, opts...)
+	if err != nil {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		return "ERROR: MCP tool " + g.server + " failed: " + err.Error(), nil
+	}
+	return out, nil
 }
 
 func sanitizeName(s string) string {

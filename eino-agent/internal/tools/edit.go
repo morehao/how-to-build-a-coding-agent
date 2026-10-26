@@ -88,6 +88,9 @@ func (o *Options) editFile(ctx context.Context, in editFileInput) (string, error
 		if in.OldStr != "" {
 			return "", fmt.Errorf("%s does not exist; set old_str to \"\" to create it", rel)
 		}
+		if bytes.IndexByte([]byte(in.NewStr), 0) >= 0 {
+			return "", fmt.Errorf("%s: new content appears to be binary; edit_file only supports UTF-8 text", rel)
+		}
 		if err := approveEdit(ctx, o, rel, "", in.NewStr, "", in.NewStr, true); err != nil {
 			return "", err
 		}

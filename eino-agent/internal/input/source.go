@@ -52,9 +52,11 @@ func (s *Source) scan(r io.Reader) {
 			return
 		}
 	}
-	select {
-	case s.ch <- Result{Err: scanner.Err()}:
-	case <-s.done:
+	if err := scanner.Err(); err != nil {
+		select {
+		case s.ch <- Result{Err: err}:
+		case <-s.done:
+		}
 	}
 }
 
