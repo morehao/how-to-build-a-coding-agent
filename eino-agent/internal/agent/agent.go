@@ -17,17 +17,19 @@ import (
 	"github.com/cloudwego/eino/flow/agent/react"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 )
 
 // Config configures the ReAct runner.
 type Config struct {
-	Model        model.ToolCallingChatModel
-	Tools        []tool.BaseTool
-	SystemPrompt string
-	MaxSteps     int
-	Stream       bool
-	UI           *ui.UI
+	Model         model.ToolCallingChatModel
+	Tools         []tool.BaseTool
+	SystemPrompt  string
+	MaxSteps      int
+	ContextTokens int
+	Stream        bool
+	UI            *ui.UI
 }
 
 // Agent is a thin wrapper around Eino's ReAct agent.
@@ -63,8 +65,13 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 			ExecuteSequentially: true,
 			UnknownToolsHandler: unknownHandler,
 		},
-		MaxStep:               cfg.MaxSteps,
-		MessageModifier:       Modifier(cfg.SystemPrompt),
+		MaxStep: cfg.MaxSteps,
+		MessageModifier: Modifier(cfg.SystemPrompt, cfg.ContextTokens, func(stats contextmgr.Stats) {
+			if cfg.UI != nil {
+				cfg.UI.Verbosef("context compacted: %d -> %d tokens (stubbed_tools=%d dropped_turns=%d truncated=%d)",
+					stats.BeforeTokens, stats.AfterTokens, stats.StubbedTools, stats.DroppedBlocks, stats.TruncatedMessages)
+			}
+		}),
 		StreamToolCallChecker: allChunksToolCallChecker,
 		GraphName:             "EinoCodeAgent",
 	})

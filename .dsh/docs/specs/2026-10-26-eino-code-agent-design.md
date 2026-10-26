@@ -85,7 +85,7 @@ Eino 已提供本方案需要的全部基础能力：
 | Windows 原生支持 | 依赖 `bash` 与 `rg`；先支持 macOS/Linux，Windows 走 WSL |
 | 自动 commit / 自动 push / 自动开 PR | 高风险写操作，必须由人决定；agent 只负责改工作区 |
 | 跨轮保留完整 tool trace | ReAct 单轮内的工具消息不进入下一轮历史；这是刻意的上下文控制（见 6.5） |
-| 语义压缩 / 自动摘要长历史 | 先用「按字节裁剪最近消息」的确定性策略；摘要需要额外模型调用与质量评估 |
+| ReAct 的 LLM 语义摘要 | ReAct 用确定性压缩控制成本；ADK 分支再用 summarization middleware 做摘要 |
 
 ---
 
@@ -369,7 +369,8 @@ a, err := react.NewAgent(ctx, &react.AgentConfig{
 - 文件名：`<UTC 时间戳>-<6 位随机>.json`；`--resume` 接受完整路径或 session id。
 - 写入：每轮成功拿到最终 assistant 消息后，更新内存并**原子写**（temp + rename）。中途失败不追加 assistant，但工作区改动仍然保留（需在 README 说明）。
 - 加载：校验 `version`、role 只能是 `user/assistant`、workspace 存在；损坏文件报错并保留原文件，不静默覆盖。
-- 历史裁剪：调用模型前按字节估算总大小，超过 `--history-bytes`（默认 256 KiB）时从最旧的消息开始成对丢弃，保证第一条是 user；在 UI 上提示 `[history trimmed: N messages]`。不做摘要。
+- 历史裁剪：会话保存前按字节估算总大小，超过 `--history-bytes`（默认 256 KiB）时从最旧的消息开始成对丢弃，保证第一条是 user；在 UI 上提示 `[history trimmed: N messages]`。跨轮历史不做 LLM 摘要。
+- 单轮上下文压缩：每次 ChatModel 调用前，`MessageModifier` 调用 `internal/contextmgr`，按 `--context-tokens`（默认 32000，近似 `bytes/3`）压缩输入：保留 system、最近 3 个 tool 结果和当前 user；旧 tool 结果替换为占位符；仍超预算则按 user turn 丢弃最旧块；最后才截断最大消息。`Config.ContextTokens` 为 0 时该层关闭（供测试/嵌入使用）；CLI 校验要求 >= 1024，避免误配出不可用的上下文。
 
 **为什么不在跨轮历史里保留 tool 消息**：ReAct 单轮内的 tool 调用/结果已经完成使命；跨轮保留会迅速膨胀上下文，而且旧的 tool 结果可能过期（文件已改）。代价是模型可能重复读同一个文件——这比上下文爆炸更可控。
 
@@ -446,7 +447,8 @@ REPL 命令：`/help`、`/clear`（清空内存历史，不删会话文件）、
 | `--base-url` | `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` / `ARK_BASE_URL` | 各 provider 默认 | Ark 默认 `https://ark.cn-beijing.volces.com/api/v3` |
 | `--workspace` | `EINO_AGENT_WORKSPACE` | `.` | 解析为绝对真实路径 |
 | `--max-steps` | `EINO_AGENT_MAX_STEPS` | 30 | Eino ReAct 步数 |
-| `--history-bytes` | `EINO_AGENT_HISTORY_BYTES` | 262144 | 历史预算 |
+| `--history-bytes` | `EINO_AGENT_HISTORY_BYTES` | 262144 | 持久化历史预算 |
+| `--context-tokens` | `EINO_AGENT_CONTEXT_TOKENS` | 32000 | 单次模型调用近似 token 预算 |
 | `--permission-mode` | `EINO_AGENT_PERMISSION_MODE` | `ask` | `ask/read-only/yolo` |
 | `--session-dir` | `EINO_AGENT_SESSION_DIR` | `os.UserConfigDir()/eino-agent/sessions` | 会话目录 |
 | `--resume` | `EINO_AGENT_RESUME` | 空 | session id 或路径 |
@@ -702,7 +704,7 @@ go run ./cmd/eino-agent --provider ark --model <endpoint-id> --workspace .
 | Eino API 版本漂移 | 编译失败 / 字段改名 | 锁定 `v0.9.22`；以本地源码 `v0.9.21+` 交叉核对；升级单独 PR | 中 |
 | Claude 流式判定不正确 | 工具调用轮被当成最终回答 / 文本丢失 | 自定义 checker + `--no-stream` 回退；集成测试覆盖 Stream | 中 |
 | 工具并发导致审批交错 | 多个 bash 同时弹提示 | `ExecuteSequentially: true` + approver mutex | 低 |
-| 上下文溢出 | 模型报 context length | 历史裁剪 + 单工具输出上限；提示用户 `/clear` | 中 |
+| 上下文溢出 | 模型报 context length | 单轮确定性压缩 + 历史裁剪 + 单工具输出上限；提示用户调小 `--context-tokens` 或 `/clear` | 低 |
 | 模型不遵守 edit 约束 | 多次匹配、空 old_str | 工具返回可读错误；prompt 明确「先读后改」 | 中 |
 | 审批体验太烦 | 用户频繁输入 y | 同命令本会话记住 `a`；`--permission-mode yolo` 显式开关 | 低 |
 | 依赖体积过大 | 二进制 > 60 MiB | 去掉 Claude 或用 build tag 拆分；见开放问题 Q1 | 低 |
