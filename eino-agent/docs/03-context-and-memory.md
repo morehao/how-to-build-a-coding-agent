@@ -86,7 +86,19 @@ ratio = observedPromptTokens / estimatedPromptTokens
 - session 的目标是“继续对话”，不是“精确重放图状态”；
 - 需要精确重放时应该用 trace，而不是 session。
 
-`--resume` 支持 session id 或 JSON 路径；恢复时会提示工作区是否变化。
+恢复方式有三条：
+
+- 启动时 `--resume <id|path>` 直接加载某个快照；
+- REPL 内 `/sessions` 列出最近的 session（当前 session 标 `*`）；
+- REPL 内 `/resume <id>` 切换当前会话，之后的新消息写回该 session。
+
+恢复时会提示工作区是否变化。`/resume` 恢复的是“对话快照”，不是 Eino 图状态；中断点、工具调用中间态不会被重放。
+
+## 5.1 中断当前 turn
+
+REPL 里 Ctrl-C 只取消**当前正在跑的 turn**，回到提示符；已经完成的轮次不会丢，未完成的轮次不会写入 session。空闲时再按 Ctrl-C 才退出进程（退出码 130）；SIGTERM 直接取消整个进程。
+
+实现上，每个 turn 使用独立的 `context.WithCancel`，信号处理只取消这个子 context；这样 ReAct 和 ADK 的 `RunTurn` 都能在模型/工具边界返回，而 REPL 循环继续。边界：工具已经开始的外部副作用（例如 bash 写文件）不会因为取消而回滚；需要回滚时用 checkpoint，或者把副作用工具设计成可补偿。
 
 ## 6. `/compact` 与 ADK 的差异
 
