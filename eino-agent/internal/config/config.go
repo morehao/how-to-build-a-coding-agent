@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 )
 
 // Version is the user-visible agent version.
@@ -40,6 +42,7 @@ type Config struct {
 	Workspace      string
 	MaxSteps       int
 	HistoryBytes   int
+	ContextTokens  int
 	PermissionMode string
 	SessionDir     string
 	Resume         string
@@ -69,6 +72,7 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		workspace      string
 		maxSteps       int
 		historyBytes   int
+		contextTokens  int
 		permissionMode string
 		sessionDir     string
 		resume         string
@@ -84,6 +88,7 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&workspace, "workspace", "", "workspace directory (default: current directory)")
 	fs.IntVar(&maxSteps, "max-steps", 0, "maximum ReAct graph steps (default: 30)")
 	fs.IntVar(&historyBytes, "history-bytes", 0, "conversation history budget in bytes (default: 262144)")
+	fs.IntVar(&contextTokens, "context-tokens", 0, "approximate token budget for one model call (default: 32000)")
 	fs.StringVar(&permissionMode, "permission-mode", "", "ask|read-only|yolo (default: ask)")
 	fs.StringVar(&sessionDir, "session-dir", "", "directory for session snapshots")
 	fs.StringVar(&resume, "resume", "", "resume a session by id or path")
@@ -171,6 +176,14 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		return nil, fmt.Errorf("history-bytes must be >= 1024 (got %d)", cfg.HistoryBytes)
 	}
 
+	cfg.ContextTokens, err = intValue(visited["context-tokens"], contextTokens, getenv("EINO_AGENT_CONTEXT_TOKENS"), contextmgr.DefaultContextTokens)
+	if err != nil {
+		return nil, fmt.Errorf("context-tokens: %w", err)
+	}
+	if cfg.ContextTokens < 1024 {
+		return nil, fmt.Errorf("context-tokens must be >= 1024 (got %d)", cfg.ContextTokens)
+	}
+
 	cfg.PermissionMode = strings.ToLower(firstNonEmpty(permissionMode, getenv("EINO_AGENT_PERMISSION_MODE"), PermissionAsk))
 	switch cfg.PermissionMode {
 	case PermissionAsk, PermissionReadOnly, PermissionYolo:
@@ -209,7 +222,8 @@ Flags:
   --base-url string         OpenAI-compatible or Anthropic base URL
   --workspace string        workspace directory (default: current directory)
   --max-steps int           maximum ReAct graph steps (default: 30)
-  --history-bytes int       conversation history budget (default: 262144)
+  --history-bytes int       session history budget (default: 262144)
+  --context-tokens int      approximate token budget per model call (default: 32000)
   --permission-mode string  ask|read-only|yolo (default: ask)
   --session-dir string      directory for session snapshots
   --resume string           resume a session by id or path
@@ -221,7 +235,7 @@ Flags:
 
 Environment:
   EINO_AGENT_PROVIDER, EINO_AGENT_MODEL, EINO_AGENT_WORKSPACE,
-  EINO_AGENT_MAX_STEPS, EINO_AGENT_HISTORY_BYTES,
+  EINO_AGENT_MAX_STEPS, EINO_AGENT_HISTORY_BYTES, EINO_AGENT_CONTEXT_TOKENS,
   EINO_AGENT_PERMISSION_MODE, EINO_AGENT_SESSION_DIR, EINO_AGENT_RESUME,
   EINO_AGENT_NO_STREAM, EINO_AGENT_VERBOSE, EINO_AGENT_PROMPT
 

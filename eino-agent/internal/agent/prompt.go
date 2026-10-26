@@ -14,6 +14,7 @@ import (
 
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
 )
 
@@ -75,17 +76,17 @@ func LoadProjectInstructions(ws *workspace.Workspace) (string, string) {
 	return "", ""
 }
 
-// Modifier returns a react.MessageModifier that prepends the system prompt to
-// every model call. ReAct's internal state accumulates tool messages, so this
-// is the one place that guarantees the system message is always first.
-func Modifier(systemPrompt string) func(context.Context, []*schema.Message) []*schema.Message {
+// Modifier returns a react.MessageModifier that prepends the system prompt and
+// compacts the model input before every call. ReAct's internal state
+// accumulates tool messages, so this is the one place that both guarantees the
+// system message is first and enforces the context budget mid-turn.
+func Modifier(systemPrompt string, maxTokens int, onCompact func(contextmgr.Stats)) func(context.Context, []*schema.Message) []*schema.Message {
 	return func(_ context.Context, input []*schema.Message) []*schema.Message {
-		if len(input) > 0 && input[0] != nil && input[0].Role == schema.System {
-			return input
+		out := contextmgr.WithSystem(systemPrompt, input)
+		out, stats := contextmgr.CompactWithStats(out, maxTokens)
+		if stats.Changed() && onCompact != nil {
+			onCompact(stats)
 		}
-		out := make([]*schema.Message, 0, len(input)+1)
-		out = append(out, schema.SystemMessage(systemPrompt))
-		out = append(out, input...)
 		return out
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/tools"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
@@ -215,5 +216,31 @@ func TestRunTurnToolErrorIsRecoverable(t *testing.T) {
 	}
 	if !sawReadErr || !sawEditErr {
 		t.Fatalf("tool errors not returned to model: %+v", state.lastInput)
+	}
+}
+
+func TestModifierCompactsMidTurn(t *testing.T) {
+	var stats contextmgr.Stats
+	mod := Modifier("system", 800, func(s contextmgr.Stats) { stats = s })
+
+	msgs := []*schema.Message{
+		schema.UserMessage("one"),
+		schema.AssistantMessage(strings.Repeat("a", 3000), nil),
+		schema.UserMessage("two"),
+		schema.AssistantMessage(strings.Repeat("b", 3000), nil),
+		schema.UserMessage("latest"),
+	}
+	out := mod(context.Background(), msgs)
+	if !stats.Changed() {
+		t.Fatalf("expected compaction, stats=%+v", stats)
+	}
+	if out[0].Role != schema.System {
+		t.Fatalf("system not first: %+v", out[0])
+	}
+	if got := contextmgr.EstimateTokens(out); got > 800 {
+		t.Fatalf("still over budget: %d", got)
+	}
+	if out[len(out)-1].Content != "latest" {
+		t.Fatalf("latest user message lost: %+v", out)
 	}
 }

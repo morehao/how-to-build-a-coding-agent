@@ -28,8 +28,8 @@ func TestParseOpenAIDefaults(t *testing.T) {
 	if cfg.Workspace != ws {
 		t.Fatalf("workspace = %q, want %q", cfg.Workspace, ws)
 	}
-	if cfg.PermissionMode != PermissionAsk || cfg.MaxSteps != 30 || cfg.HistoryBytes != 256*1024 {
-		t.Fatalf("defaults = mode:%q steps:%d history:%d", cfg.PermissionMode, cfg.MaxSteps, cfg.HistoryBytes)
+	if cfg.PermissionMode != PermissionAsk || cfg.MaxSteps != 30 || cfg.HistoryBytes != 256*1024 || cfg.ContextTokens != 32000 {
+		t.Fatalf("defaults = mode:%q steps:%d history:%d context:%d", cfg.PermissionMode, cfg.MaxSteps, cfg.HistoryBytes, cfg.ContextTokens)
 	}
 	if cfg.SessionDir != sessions {
 		t.Fatalf("session dir = %q, want %q", cfg.SessionDir, sessions)
@@ -48,6 +48,7 @@ func TestParseFlagsOverrideEnvironment(t *testing.T) {
 		"--workspace", ws,
 		"--max-steps", "12",
 		"--history-bytes", "4096",
+		"--context-tokens", "24000",
 		"--permission-mode", "yolo",
 		"--no-stream",
 		"--verbose",
@@ -64,7 +65,7 @@ func TestParseFlagsOverrideEnvironment(t *testing.T) {
 	if cfg.Provider != ProviderClaude || cfg.Model != "claude-test" {
 		t.Fatalf("provider/model = %q/%q", cfg.Provider, cfg.Model)
 	}
-	if cfg.BaseURL != "https://example.invalid" || cfg.MaxSteps != 12 || cfg.HistoryBytes != 4096 {
+	if cfg.BaseURL != "https://example.invalid" || cfg.MaxSteps != 12 || cfg.HistoryBytes != 4096 || cfg.ContextTokens != 24000 {
 		t.Fatalf("flags not applied: %+v", cfg)
 	}
 	if cfg.PermissionMode != PermissionYolo || !cfg.NoStream || !cfg.Verbose || cfg.Prompt != "hello" {
@@ -126,6 +127,15 @@ func TestParseInvalidEnvInt(t *testing.T) {
 		"EINO_AGENT_MAX_STEPS": "many",
 	}))
 	if err == nil || !strings.Contains(err.Error(), "invalid integer") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestParseRejectsTooSmallContextBudget(t *testing.T) {
+	_, err := Parse([]string{"--model", "m", "--context-tokens", "512", "--workspace", t.TempDir()}, env(map[string]string{
+		"OPENAI_API_KEY": "sk",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "context-tokens must be >= 1024") {
 		t.Fatalf("error = %v", err)
 	}
 }

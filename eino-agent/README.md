@@ -69,7 +69,8 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 | `--base-url` | OpenAI 兼容或 Anthropic 代理地址 | provider 默认 |
 | `--workspace` | 工作区根目录 | 当前目录 |
 | `--max-steps` | ReAct 图最大步数 | `30` |
-| `--history-bytes` | 历史消息预算（字节，近似值） | `262144` |
+| `--history-bytes` | 持久化历史预算（字节，近似值） | `262144` |
+| `--context-tokens` | 单次模型调用的近似 token 预算；超出时压缩输入 | `32000` |
 | `--permission-mode` | `ask` / `read-only` / `yolo` | `ask` |
 | `--session-dir` | 会话快照目录 | 用户配置目录下 `eino-agent/sessions` |
 | `--resume` | 按 session id 或 JSON 路径恢复 | 无 |
@@ -97,6 +98,21 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 工具的业务错误（文件不存在、`old_str` 不唯一、只读模式禁用、用户拒绝命令）会以 `ERROR: ...` **作为工具输出返回给模型**，不会直接中断 ReAct 图；模型可以据此换一种做法。只有 context 取消这类错误才会终止本轮。
 
 所有工具输出还有 256 KiB 的硬上限，超出后截断并标注。
+
+## 上下文管理
+
+上下文分两层处理：
+
+1. **单轮模型调用**：`MessageModifier` 在每次 ChatModel 调用前执行 `internal/contextmgr` 的确定性压缩。顺序是：
+   - 保留 system prompt、最近的 3 个 tool 结果和当前 user 消息；
+   - 更旧的 tool 结果替换成 `[tool output omitted ...]` 占位符，旧的 tool call 参数也会压缩；
+   - 仍然超预算时，按 user turn 从旧到新丢弃整块，保证 tool call / tool result 不被拆散；
+   - 仍然超预算时，截断最大的消息，并标注 `[truncated to save context]`。
+2. **跨轮持久化**：`--history-bytes` 控制保存到 session 的历史总量，`session.Trim` 优先丢掉最旧的消息，并保证第一条是 user。
+
+ReAct 分支的压缩是**确定性**的，不额外调用模型，因此没有摘要成本，也不会因为摘要失败而中断任务。token 数是保守估算（约 `bytes/3`），不是 provider 的精确 tokenizer；默认 32000 对多数模型是安全值，模型上下文更大时可以调高。
+
+被省略/截断的内容会在 prompt 里提示模型：需要细节就带更小的 `limit` / `max_results` 重新调用工具。
 
 ## 权限与安全
 
@@ -147,6 +163,7 @@ cmd/eino-agent-adk/main.go      ADK 入口
         ├── internal/approval    bash 人工审批
         ├── internal/agent       Eino ReAct + system prompt + callbacks
         ├── internal/agentadk    Eino ADK ChatModelAgent + Runner + 事件渲染
+        ├── internal/contextmgr  确定性上下文压缩
         ├── internal/session     JSON 快照
         └── internal/ui          终端渲染
 ```
@@ -195,8 +212,9 @@ go test ./...
 
 测试不需要 API key：
 
-- `internal/agent` 用一个脚本化的 fake `ToolCallingChatModel` 驱动**真实 ReAct 图 + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复；
+- `internal/agent` 用一个脚本化的 fake `ToolCallingChatModel` 驱动**真实 ReAct 图 + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复、上下文压缩；
 - `internal/agentadk` 用同一类 fake model 驱动**真实 ADK Runner + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复；
+- `internal/contextmgr` 覆盖 token 估算、旧 tool 结果占位、旧 turn 丢弃、tool call 配对和超大消息截断；
 - `internal/tools` 覆盖读、写、列目录、bash 审批/超时/截断、搜索 fallback；
 - `internal/workspace` 覆盖路径逃逸和 symlink 逃逸；
 - `internal/session` 覆盖保存、恢复、裁剪；
@@ -205,7 +223,8 @@ go test ./...
 ## 已知限制
 
 - 这是教学/演示向的简化实现，不是 Claude Code / Codex 的完整替代品；
-- 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引、自动上下文压缩；
+- 没有 MCP、子 agent、多模态输入、undo 栈、仓库索引；
+- ReAct 分支只做确定性上下文压缩，不做 LLM 摘要；ADK 分支使用 ADK 的 summarization middleware；
 - `bash` 超时依赖 `exec.CommandContext`，被杀的是 shell 进程本身，极端情况下子进程可能残留；
 - 没有 provider 真实网络集成测试；需要 API key 才能做端到端验证；
 - ADK 版目前是单 agent 线性事件流，没有使用 ADK 的 multi-agent、checkpoint、interrupt/resume 能力；这些是后续可扩展点。
