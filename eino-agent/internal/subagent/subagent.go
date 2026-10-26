@@ -10,6 +10,7 @@ import (
 	"io"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/components/tool"
@@ -33,7 +34,9 @@ type Runner interface {
 
 // ReActRunner is a read-only nested ReAct agent.
 type ReActRunner struct {
-	agent *agent.Agent
+	agent          *agent.Agent
+	timeout        time.Duration
+	maxResultBytes int
 }
 
 // Config builds a read-only nested runner.
@@ -44,6 +47,12 @@ type Config struct {
 	MaxSteps       int
 	MaxOutputBytes int
 	ContextTokens  int
+	// SkillTool is an optional read-only skill loader exposed to the nested
+	// agent. SkillPrompt is the matching progressive-disclosure prompt section.
+	SkillTool      tool.BaseTool
+	SkillPrompt    string
+	Timeout        time.Duration
+	MaxResultBytes int
 }
 
 // NewReActRunner creates a read-only nested agent with read/list/search/repo_map
@@ -63,6 +72,12 @@ func NewReActRunner(ctx context.Context, cfg Config) (*ReActRunner, error) {
 	}
 	if cfg.ContextTokens <= 0 {
 		cfg.ContextTokens = 20000
+	}
+	if cfg.Timeout <= 0 {
+		cfg.Timeout = 2 * time.Minute
+	}
+	if cfg.MaxResultBytes <= 0 {
+		cfg.MaxResultBytes = 64 * 1024
 	}
 	all, err := tools.New(ctx, tools.Options{
 		Workspace:      cfg.Workspace,
@@ -89,6 +104,12 @@ func NewReActRunner(ctx context.Context, cfg Config) (*ReActRunner, error) {
 		nestedTools = append(nestedTools, t)
 		names = append(names, info.Name)
 	}
+	if cfg.SkillTool != nil {
+		if info, infoErr := cfg.SkillTool.Info(ctx); infoErr == nil && info != nil {
+			nestedTools = append(nestedTools, cfg.SkillTool)
+			names = append(names, info.Name)
+		}
+	}
 	if len(nestedTools) == 0 {
 		return nil, errors.New("subagent: no read-only tools available")
 	}
@@ -96,6 +117,7 @@ func NewReActRunner(ctx context.Context, cfg Config) (*ReActRunner, error) {
 	if err != nil {
 		return nil, err
 	}
+	prompt += cfg.SkillPrompt
 	prompt += "\n\nYou are a read-only subagent. Investigate the task and report concise findings. " +
 		"You cannot edit files, run bash, or delegate further. Available tools: " + strings.Join(names, ", ") + "."
 	silent := ui.New(io.Discard, io.Discard, false, false)
@@ -113,7 +135,7 @@ func NewReActRunner(ctx context.Context, cfg Config) (*ReActRunner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("subagent agent: %w", err)
 	}
-	return &ReActRunner{agent: nested}, nil
+	return &ReActRunner{agent: nested, timeout: cfg.Timeout, maxResultBytes: cfg.MaxResultBytes}, nil
 }
 
 // Run executes one independent task.
@@ -122,6 +144,11 @@ func (r *ReActRunner) Run(ctx context.Context, prompt string) (string, error) {
 	if prompt == "" {
 		return "", errors.New("subagent: empty task")
 	}
+	if r.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, r.timeout)
+		defer cancel()
+	}
 	final, err := r.agent.RunTurn(ctx, []*schema.Message{schema.UserMessage(prompt)})
 	if err != nil {
 		return "", err
@@ -129,7 +156,18 @@ func (r *ReActRunner) Run(ctx context.Context, prompt string) (string, error) {
 	if final == nil {
 		return "", errors.New("subagent: empty final message")
 	}
-	return final.Content, nil
+	return truncateUTF8(final.Content, r.maxResultBytes), nil
+}
+
+func truncateUTF8(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.ValidString(s[:cut]) {
+		cut--
+	}
+	return s[:cut] + "\n... [subagent report truncated]"
 }
 
 type taskInput struct {
@@ -156,6 +194,7 @@ func NewTaskTool(r Runner) (tool.BaseTool, error) {
 				}
 				return "ERROR: subagent task failed: " + err.Error(), nil
 			}
+			out = truncateUTF8(out, 64*1024)
 			return fmt.Sprintf("subagent (%s):\n%s", strings.TrimSpace(in.Description), out), nil
 		},
 	)

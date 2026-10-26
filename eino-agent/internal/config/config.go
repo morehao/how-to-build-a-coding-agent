@@ -64,6 +64,8 @@ type Config struct {
 	MaxTotalTokens   int
 	MaxTokens        int
 	MCPConfig        string
+	SkillsDir        string
+	NoSkills         bool
 }
 
 // ErrHelp is returned when the user requested usage information.
@@ -105,6 +107,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		maxTotalTokens   int
 		maxTokens        int
 		mcpConfig        string
+		skillsDir        string
+		noSkills         bool
 	)
 
 	fs.StringVar(&provider, "provider", "", "model provider: auto|openai|claude|ark")
@@ -133,6 +137,8 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.IntVar(&maxTotalTokens, "max-total-tokens", 0, "abort after this many total tokens (0 = unlimited)")
 	fs.IntVar(&maxTokens, "max-tokens", 0, "maximum completion tokens for Claude (default: 8192)")
 	fs.StringVar(&mcpConfig, "mcp-config", "", "JSON file listing MCP servers to load")
+	fs.StringVar(&skillsDir, "skills-dir", "", "directory of SKILL.md bundles (default: skills)")
+	fs.BoolVar(&noSkills, "no-skills", false, "disable workspace skills")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -292,6 +298,9 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	if err != nil || cfg.MaxTokens < 1 {
 		return nil, fmt.Errorf("max-tokens must be >= 1")
 	}
+	cfg.SkillsDir = firstNonEmpty(skillsDir, getenv("EINO_AGENT_SKILLS_DIR"), "skills")
+	cfg.NoSkills = boolValue(visited["no-skills"], noSkills, getenv("EINO_AGENT_NO_SKILLS"))
+
 	cfg.MCPConfig = firstNonEmpty(mcpConfig, getenv("EINO_AGENT_MCP_CONFIG"))
 	if cfg.MCPConfig != "" {
 		absMCP, err := filepath.Abs(cfg.MCPConfig)
@@ -346,6 +355,8 @@ Observability and tools:
   --trace string            write a JSONL trace (turn/model/tool events)
   --script string           fake-provider script JSON (for --provider fake)
   --mcp-config string       JSON file listing stdio MCP servers
+  --skills-dir string       directory of SKILL.md bundles (default: skills)
+  --no-skills               disable workspace skills
 
 Environment:
   EINO_AGENT_PROVIDER, EINO_AGENT_MODEL, EINO_AGENT_WORKSPACE,
@@ -353,6 +364,7 @@ Environment:
   EINO_AGENT_PERMISSION_MODE, EINO_AGENT_SESSION_DIR, EINO_AGENT_RESUME,
   EINO_AGENT_NO_STREAM, EINO_AGENT_VERBOSE, EINO_AGENT_PROMPT,
   EINO_AGENT_TRACE, EINO_AGENT_SCRIPT, EINO_AGENT_MCP_CONFIG,
+  EINO_AGENT_SKILLS_DIR, EINO_AGENT_NO_SKILLS,
   EINO_AGENT_MAX_RETRIES, EINO_AGENT_RETRY_BASE_MS, EINO_AGENT_MAX_TOTAL_TOKENS,
   EINO_AGENT_MAX_TOKENS, EINO_AGENT_NO_CHECKPOINTS, EINO_AGENT_NO_READ_BEFORE_EDIT,
   EINO_AGENT_ALLOW_SENSITIVE, EINO_AGENT_ALLOW_ENV

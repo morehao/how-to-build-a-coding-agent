@@ -160,3 +160,48 @@ func TestUndoRestoresEditedFile(t *testing.T) {
 		t.Fatal("run did not exit")
 	}
 }
+
+func TestFakeProviderLoadsSkillTool(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "skills", "review")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(`---
+name: review
+description: Review a diff.
+---
+
+Read the diff before commenting.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(dir, "script.json")
+	script := `{
+  "name": "skill-smoke",
+  "steps": [
+    {"tool_calls": [{"name": "skill", "arguments": "{\"name\":\"review\"}"}]},
+    {"content": "skill used"}
+  ]
+}`
+	if err := os.WriteFile(scriptPath, []byte(script), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tracePath := filepath.Join(dir, "trace.jsonl")
+	var out, errOut bytes.Buffer
+	code := run([]string{
+		"--provider", "fake", "--script", scriptPath,
+		"--workspace", dir, "--session-dir", filepath.Join(dir, "sessions"),
+		"--no-stream", "--trace", tracePath, "--prompt", "review the diff",
+	}, strings.NewReader(""), &out, &errOut, false)
+	if code != 0 {
+		t.Fatalf("code=%d\nstdout:\n%s\nstderr:\n%s", code, out.String(), errOut.String())
+	}
+	traceData, err := os.ReadFile(tracePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(traceData), `"tool":"skill"`) {
+		t.Fatalf("skill tool was not called:\n%s", string(traceData))
+	}
+}

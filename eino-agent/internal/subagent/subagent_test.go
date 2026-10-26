@@ -2,10 +2,12 @@ package subagent
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/cloudwego/eino/components/tool"
 
@@ -92,5 +94,61 @@ func TestNestedRunnerIsReadOnly(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("bash ran in subagent: %v", err)
+	}
+}
+
+func TestNestedRunnerCapsReport(t *testing.T) {
+	root := t.TempDir()
+	script := &model.FakeScript{Name: "cap", Steps: []model.FakeStep{
+		{Content: strings.Repeat("x", 200)},
+	}}
+	fake, err := model.NewFakeModel(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewReActRunner(context.Background(), Config{
+		Workspace:      ws,
+		Model:          fake,
+		MaxResultBytes: 32,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := r.Run(context.Background(), "summarize")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "truncated") || len(out) > 64 {
+		t.Fatalf("out length=%d: %q", len(out), out)
+	}
+}
+
+func TestNestedRunnerTimeout(t *testing.T) {
+	root := t.TempDir()
+	script := &model.FakeScript{Name: "slow", Steps: []model.FakeStep{
+		{Content: "late", DelayMS: 300},
+	}}
+	fake, err := model.NewFakeModel(script)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := workspace.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := NewReActRunner(context.Background(), Config{
+		Workspace: ws,
+		Model:     fake,
+		Timeout:   10 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(context.Background(), "slow"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want deadline exceeded", err)
 	}
 }

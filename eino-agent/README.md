@@ -1,6 +1,6 @@
 # Eino Code Agent
 
-一个运行在本地终端里的教学向 coding agent，基于 [CloudWeGo Eino](https://github.com/cloudwego/eino)。它从 ReAct 最小闭环出发，逐步补齐 agent 工程里真正难的部分：工作区边界、审批、读后写、可回滚的文件修改、上下文预算、trace 和确定性 eval。
+一个运行在本地终端里的教学向 coding agent，基于 [CloudWeGo Eino](https://github.com/cloudwego/eino)。它从 ReAct 最小闭环出发，逐步补齐 agent 工程里真正难的部分：工作区边界、审批、读后写、可回滚的文件修改、上下文预算、`SKILL.md` 技能、trace 和确定性 eval。
 
 这个目录是仓库根目录 workshop 示例之外的**独立 Go module**。
 
@@ -91,6 +91,8 @@ REPL 命令：
 | `--trace` | JSONL trace 路径 | 无 |
 | `--script` | fake provider 脚本 | 无 |
 | `--mcp-config` | MCP server JSON 配置 | 无 |
+| `--skills-dir` | `SKILL.md` 技能目录 | `skills` |
+| `--no-skills` | 关闭工作区技能 | 开启 |
 
 退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` SIGINT。
 
@@ -98,7 +100,7 @@ REPL 命令：
 
 ## 工具
 
-模型看到八个内置工具（`task` 由 CLI 额外注入时是第九个）：
+模型看到八个内置工具；`task` 和 `skill` 由 CLI 按需注入，最多十个：
 
 | 工具 | 行为 | 关键限制 |
 | --- | --- | --- |
@@ -110,9 +112,26 @@ REPL 命令：
 | `bash` | 工作区根目录 `bash -c` | 默认 120s、最大 600s；输出头尾各约 128 KiB；超时杀进程组 |
 | `code_search` | 正则搜索，优先 `rg`，否则 Go walker | 默认 100 条、最大 500 条；单文件 `rg` 最多 100 |
 | `update_plan` | 整体替换 `.eino-agent/plan.md` | 最大 32 KiB |
-| `task` | 委派只读子 agent（可选） | 子 agent 无 edit/bash，不能再委派 |
+| `task` | 委派只读子 agent（可选） | 子 agent 无 edit/bash，不能再委派；默认 2 分钟、64 KiB 报告上限 |
+| `skill` | 按名加载 `SKILL.md` 正文（可选） | 只读；渐进式披露；`fork` 走只读子 agent |
 
 工具的业务错误以 `ERROR: ...` 作为工具输出返回模型，不会直接中断图；UI 会把 `ERROR:` 和非零 `exit code` 显示为失败。所有工具输出有 256 KiB 硬上限。
+
+## Skills
+
+在仓库里放 `skills/<name>/SKILL.md`，CLI 只把 name/description 注入 system prompt；模型匹配任务后调用 `skill` 工具加载正文。支持 `context: inline` 和 `context: fork`，默认目录可用 `--skills-dir` 修改。
+
+```markdown
+---
+name: review
+description: Review a Go diff for correctness, error paths and missing tests.
+---
+
+1. Read every changed file.
+2. Check error handling and tests.
+```
+
+Skill 是仓库内容，不是系统指令：它不能覆盖审批/安全规则，也不会获得额外工具权限。完整格式、fork、安全和边界见 [`docs/skills.md`](docs/skills.md)。
 
 ## 安全边界
 
@@ -246,6 +265,7 @@ cmd/eino-agent-adk/main.go      ADK 入口
         ├── internal/policy      敏感文件/环境变量
         ├── internal/budget      token 预算
         ├── internal/retry       指数退避
+        ├── internal/skill       SKILL.md 加载 + 渐进式披露
         ├── internal/subagent    只读嵌套 runner + task
         ├── internal/mcp         stdio MCP 工具
         ├── internal/agent       Eino ReAct + prompt + callbacks
@@ -322,6 +342,7 @@ docs/mcp.md                    MCP 接入
 
 - 教学/演示向实现，不是 Claude Code / Codex 的完整替代品；
 - 没有多模态输入、持久化向量索引、并行子 agent；
+- skill 不支持热加载、嵌套目录、skill 级工具白名单或 `fork_with_context`；
 - `repo_map` 的符号提取是正则，不是 AST/语言服务器；
 - `.einoignore` 是 gitignore 子集，不是完整实现；
 - retry 是字符串启发式，且只重试“创建流”阶段；

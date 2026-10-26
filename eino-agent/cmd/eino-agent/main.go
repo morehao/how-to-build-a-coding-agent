@@ -12,6 +12,7 @@ import (
 	"time"
 
 	einomodel "github.com/cloudwego/eino/components/model"
+	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/agent"
@@ -27,6 +28,7 @@ import (
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/model"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/retry"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/skill"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/subagent"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/summary"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/tools"
@@ -102,6 +104,26 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		u.Error("error: %v", err)
 		return 1
 	}
+	var skillTool tool.BaseTool
+	var skillPrompt string
+	if !cfg.NoSkills {
+		skillsBackend, skillErr := skill.NewFilesystemBackend(ws, []string{cfg.SkillsDir})
+		if skillErr != nil {
+			u.Warn("warning: skills disabled: %v", skillErr)
+		} else if defs, listErr := skillsBackend.List(ctx); listErr != nil {
+			u.Warn("warning: skills disabled: %v", listErr)
+		} else if len(defs) > 0 {
+			st, toolErr := skill.NewTool(skill.ToolOptions{Backend: skillsBackend})
+			if toolErr != nil {
+				u.Warn("warning: skills disabled: %v", toolErr)
+			} else {
+				skillTool = st
+				skillPrompt = skill.PromptSection(defs)
+				toolList = append(toolList, skillTool)
+				u.Verbosef("skills: %d loaded from %s", len(defs), cfg.SkillsDir)
+			}
+		}
+	}
 	if cfg.MCPConfig != "" {
 		mcpCfg, err := mcpbridge.Load(cfg.MCPConfig)
 		if err != nil {
@@ -134,10 +156,12 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	chatModel = model.NewUsageModel(chatModel, counter, tracker)
 
 	subRunner, err := subagent.NewReActRunner(ctx, subagent.Config{
-		Workspace: ws,
-		Model:     chatModel,
-		Trace:     rec,
-		MaxSteps:  6,
+		Workspace:   ws,
+		Model:       chatModel,
+		Trace:       rec,
+		MaxSteps:    6,
+		SkillTool:   skillTool,
+		SkillPrompt: skillPrompt,
 	})
 	if err != nil {
 		u.Warn("warning: task tool disabled: %v", err)
@@ -146,12 +170,16 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	} else {
 		toolList = append(toolList, taskTool)
 	}
+	if st, ok := skillTool.(*skill.Tool); ok && subRunner != nil {
+		st.SetRunner(subRunner)
+	}
 
 	systemPrompt, err := agent.BuildSystemPrompt(ws, cfg.PermissionMode)
 	if err != nil {
 		u.Error("error: %v", err)
 		return 1
 	}
+	systemPrompt += skillPrompt
 
 	sess, err := loadOrCreateSession(cfg, ws, u)
 	if err != nil {
