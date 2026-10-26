@@ -96,9 +96,9 @@
 
 **问题**：父 agent 做大型调查时，读文件会把主上下文淹没。
 
-**实现**：`internal/subagent` 构造只读嵌套 ReAct runner，暴露 `task` 工具；子 agent 工具集只有 `read_file`/`list_files`/`code_search`/`repo_map`，可额外拿到只读 `skill` 工具；不能再调用 `task`。子 agent 有 2 分钟默认超时和 64 KiB 报告上限。
+**实现**：`internal/subagent` 构造只读嵌套 ReAct runner，暴露 `task`（单个）和 `tasks`（并行）工具；子 agent 工具集只有 `read_file`/`list_files`/`code_search`/`repo_map`，可额外拿到只读 `skill` 工具；不能再调用 `task`/`tasks`。每个子 agent 有 2 分钟默认超时、64 KiB 报告上限，以及独立的 token 预算（`--subagent-max-tokens`，默认 16000）。`tasks` 一次最多并发 `--subagent-max-tasks`（默认 4）个，每个 task 新建独立 runner，结果按输入顺序合并。
 
-**边界**：没有并行子 agent；没有独立模型/独立 token 预算；报告被截断后父 agent 需要自己补读关键文件。
+**边界**：独立预算只覆盖子 agent 自己发起的模型调用，不是硬沙箱；父 session 的 `--max-total-tokens` 仍然会看到这些调用并可能先触发。并行 task 共享同一个 workspace，只读工具之间没有写冲突，但如果将来加入写工具，需要额外的锁/隔离。报告被截断后父 agent 需要自己补读关键文件。
 
 ## 12. 项目指令 `@import`
 

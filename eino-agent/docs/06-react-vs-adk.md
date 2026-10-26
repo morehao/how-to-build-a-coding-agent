@@ -73,7 +73,7 @@ interrupt: ADK interrupt/resume
 | 压缩 | `MessageModifier` + contextmgr | summarization middleware |
 | checkpoint | 文件级 `.eino-agent/checkpoints` | `CheckPointStore` |
 | 中断恢复 | 无 | `Runner.Resume` |
-| 子 agent | 自定义只读 ReAct runner | `subagent.NewADKRunner`，同一个 `task` 工具 |
+| 子 agent | 自定义只读 ReAct runner | `subagent.NewADKRunner`，同一套 `task`/`tasks` 工具 |
 | skill | 共享 `internal/skill` 工具 | 同样用共享工具；也可换成 ADK `adk/middlewares/skill` |
 | skill fork | 只读 ReAct 子 agent | 只读 ADK 子 agent |
 | 学习曲线 | 低 | 中高 |
