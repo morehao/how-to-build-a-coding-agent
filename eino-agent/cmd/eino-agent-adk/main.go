@@ -48,6 +48,8 @@ func main() {
 }
 
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) int {
+	stdout = ui.NewSyncWriter(stdout)
+	stderr = ui.NewSyncWriter(stderr)
 	cfg, err := config.Parse(args, os.Getenv)
 	if err != nil {
 		if errors.Is(err, config.ErrHelp) {
