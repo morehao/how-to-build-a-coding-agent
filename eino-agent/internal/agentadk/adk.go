@@ -193,9 +193,7 @@ func (a *Agent) RunTurn(ctx context.Context, history []*schema.Message) (final *
 			}
 			var toolErr error
 			if msg != nil {
-				if strings.HasPrefix(strings.TrimSpace(msg.Content), "ERROR:") {
-					toolErr = errors.New(firstLine(msg.Content))
-				}
+				toolErr = toolResultError(msg.Content)
 				if a.ui != nil {
 					a.ui.ToolEnd(mv.ToolName, msg.Content, toolErr)
 				}
@@ -324,6 +322,20 @@ func toolNames(ctx context.Context, tools []tool.BaseTool) ([]string, error) {
 		names = append(names, info.Name)
 	}
 	return names, nil
+}
+
+func toolResultError(content string) error {
+	trimmed := strings.TrimSpace(content)
+	if strings.HasPrefix(trimmed, "ERROR:") {
+		return errors.New(firstLine(trimmed))
+	}
+	if strings.HasPrefix(trimmed, "exit code:") {
+		var code int
+		if _, err := fmt.Sscanf(firstLine(trimmed), "exit code: %d", &code); err == nil && code != 0 {
+			return errors.New(firstLine(trimmed))
+		}
+	}
+	return nil
 }
 
 func lastUserContent(history []*schema.Message) string {

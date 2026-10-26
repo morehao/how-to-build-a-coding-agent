@@ -83,3 +83,18 @@ func TestRunTurnTraceAndFinalContent(t *testing.T) {
 		t.Fatalf("tool trace = %v", toolsSeen)
 	}
 }
+
+func TestToolResultError(t *testing.T) {
+	if toolResultError("ERROR: nope") == nil {
+		t.Fatal("ERROR prefix not detected")
+	}
+	if toolResultError("exit code: 2\nboom") == nil {
+		t.Fatal("non-zero exit not detected")
+	}
+	if toolResultError("exit code: 0\nok") != nil {
+		t.Fatal("zero exit marked as error")
+	}
+	if toolResultError("plain result") != nil {
+		t.Fatal("plain result marked as error")
+	}
+}
