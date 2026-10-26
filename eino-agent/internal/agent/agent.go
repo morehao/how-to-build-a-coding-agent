@@ -28,6 +28,7 @@ type Config struct {
 	SystemPrompt  string
 	MaxSteps      int
 	ContextTokens int
+	Counter       *contextmgr.Counter
 	Stream        bool
 	UI            *ui.UI
 }
@@ -66,7 +67,7 @@ func New(ctx context.Context, cfg Config) (*Agent, error) {
 			UnknownToolsHandler: unknownHandler,
 		},
 		MaxStep: cfg.MaxSteps,
-		MessageModifier: Modifier(cfg.SystemPrompt, cfg.ContextTokens, func(stats contextmgr.Stats) {
+		MessageModifier: Modifier(cfg.SystemPrompt, cfg.ContextTokens, cfg.Counter, func(stats contextmgr.Stats) {
 			if cfg.UI != nil {
 				cfg.UI.Verbosef("context compacted: %d -> %d tokens (stubbed_tools=%d dropped_turns=%d truncated=%d)",
 					stats.BeforeTokens, stats.AfterTokens, stats.StubbedTools, stats.DroppedBlocks, stats.TruncatedMessages)

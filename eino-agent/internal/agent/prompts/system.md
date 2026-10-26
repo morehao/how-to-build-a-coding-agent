@@ -20,6 +20,7 @@ All file paths are relative to the workspace root. You cannot read or write outs
 6. If a tool returns `ERROR:`, adapt your approach. Do not repeat the same failing call unchanged.
 7. Never try to escape the workspace, disable the approval gate, or run destructive commands. The user is in control of shell execution.
 8. Long conversations may contain `[tool output omitted ...]` or `[truncated ...]` markers. Re-run the relevant tool with a narrower `limit`/`max_results` if you need the missing detail; do not assume the omitted content.
+9. For multi-step work, keep `.eino-agent/plan.md` current with `update_plan`: goal, decisions, changed files, commands/results, open errors and next steps. This file is your working memory and survives context compaction.
 
 ## Tool usage
 
@@ -27,6 +28,7 @@ All file paths are relative to the workspace root. You cannot read or write outs
 - `list_files` shows the directory structure; it skips `.git`, dependencies and build output.
 - `code_search` is the preferred way to find symbols and strings. Prefer it over `bash grep`.
 - `edit_file` replaces one unique occurrence, or creates a new file when `old_str` is empty.
+- `update_plan` replaces `.eino-agent/plan.md`; use it before/after significant steps, especially in long tasks.
 - `bash` runs in the workspace root and normally requires user approval. Use it for builds, tests, `git status` and `git diff`.
 - Do not use `bash cat`, `sed`, `echo` or heredocs as a substitute for the dedicated file tools.
 

@@ -55,7 +55,9 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 
 ```text
 /help      查看命令
-/clear     清空当前会话历史
+/clear     清空当前会话历史和摘要
+/compact   把历史压缩成结构化摘要
+/plan      查看持久化工作记忆
 /session   显示 session id 和快照路径
 /exit      退出
 ```
@@ -85,7 +87,7 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 
 ## 工具
 
-模型只看到五个工具，全部通过 Eino `utils.InferTool` 从 Go struct 生成 JSON Schema：
+模型只看到六个工具，全部通过 Eino `utils.InferTool` 从 Go struct 生成 JSON Schema：
 
 | 工具 | 行为 | 关键限制 |
 | --- | --- | --- |
@@ -94,10 +96,22 @@ ADK 版和 ReAct 版共用下面的参数、工具、权限与会话说明。
 | `edit_file` | 唯一子串替换；`old_str` 为空时创建新文件 | 只替换一次；写入采用临时文件 + rename，保留权限 |
 | `bash` | 在工作区根目录执行 `bash -c` | 默认 120s、最大 600s；输出头尾各保留约 128 KiB |
 | `code_search` | 正则搜索，优先 `rg`，否则 Go walker | 默认 100 条、最大 500 条；单文件 `rg` 最多 100 条 |
+| `update_plan` | 创建/替换 `.eino-agent/plan.md` 工作记忆 | 最大 32 KiB；内容整体替换 |
 
 工具的业务错误（文件不存在、`old_str` 不唯一、只读模式禁用、用户拒绝命令）会以 `ERROR: ...` **作为工具输出返回给模型**，不会直接中断 ReAct 图；模型可以据此换一种做法。只有 context 取消这类错误才会终止本轮。
 
 所有工具输出还有 256 KiB 的硬上限，超出后截断并标注。
+
+## 工作记忆
+
+长任务可以把目标、决策、改动文件、命令结果、未解决错误和下一步写入 `.eino-agent/plan.md`：
+
+- 模型通过 `update_plan` 工具更新；
+- 每次新的一轮会把它作为背景注入，不依赖对话历史；
+- `/plan` 可以直接查看当前内容；
+- 文件放在工作区内，方便用户检查；它不会自动加入 Git，建议按需加入 `.gitignore`。
+
+这层记忆和上下文压缩互补：压缩可能丢细节，但 plan 文件会保留关键进度。
 
 ## 上下文管理
 
@@ -173,7 +187,9 @@ cmd/eino-agent-adk/main.go      ADK 入口
         ├── internal/config      flag + env → Config
         ├── internal/model       openai / claude / ark 适配器
         ├── internal/workspace   路径解析与工作区边界
-        ├── internal/tools       5 个工具 + 错误软化 + 输出上限
+        ├── internal/tools       6 个工具 + 错误软化 + 输出上限
+        ├── internal/memory      .eino-agent/plan.md 工作记忆
+        ├── internal/summary     结构化摘要（/compact）
         ├── internal/approval    bash 人工审批
         ├── internal/agent       Eino ReAct + system prompt + callbacks
         ├── internal/agentadk    Eino ADK ChatModelAgent + Runner + 事件渲染
@@ -229,7 +245,8 @@ go test ./...
 
 - `internal/agent` 用一个脚本化的 fake `ToolCallingChatModel` 驱动**真实 ReAct 图 + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复、上下文压缩；
 - `internal/agentadk` 用同一类 fake model 驱动**真实 ADK Runner + 真实工具**，覆盖 generate / stream、工具调用、工具错误恢复、摘要触发；
-- `internal/contextmgr` 覆盖 token 估算、旧 tool 结果占位、旧 turn 丢弃、tool call 配对和超大消息截断；
+- `internal/contextmgr` 覆盖 token 估算、provider usage 校准、旧 tool 结果占位、旧 turn 丢弃、tool call 配对和超大消息截断；
+- `internal/summary` 覆盖结构化摘要 prompt 和空输出错误；`internal/memory` 覆盖 plan 读写与注入；
 - `internal/tools` 覆盖读、写、列目录、bash 审批/超时/截断、搜索 fallback；
 - `internal/workspace` 覆盖路径逃逸和 symlink 逃逸；
 - `internal/session` 覆盖保存、恢复、裁剪；

@@ -1,4 +1,4 @@
-// Package tools defines the five tools exposed to the Eino ReAct agent. Each
+// Package tools defines the six tools exposed to the Eino ReAct agent. Each
 // tool is a typed Go function registered with utils.InferTool, so the JSON
 // schema seen by the model is derived from the input struct.
 package tools
@@ -86,6 +86,15 @@ func New(ctx context.Context, opts Options) ([]tool.BaseTool, error) {
 		return nil, fmt.Errorf("register bash: %w", err)
 	}
 
+	planTool, err := utils.InferTool(
+		"update_plan",
+		"Create or replace the persistent working-memory plan at .eino-agent/plan.md. Use it to preserve goals, decisions, changed files, command results, open errors and next steps across context compaction.",
+		wrapTool(&opts, opts.updatePlan),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("register update_plan: %w", err)
+	}
+
 	searchTool, err := utils.InferTool(
 		"code_search",
 		"Search file contents with a regular expression. Prefers ripgrep and falls back to a Go walker when rg is unavailable.",
@@ -95,7 +104,7 @@ func New(ctx context.Context, opts Options) ([]tool.BaseTool, error) {
 		return nil, fmt.Errorf("register code_search: %w", err)
 	}
 
-	return []tool.BaseTool{readTool, listTool, editTool, bashTool, searchTool}, nil
+	return []tool.BaseTool{readTool, listTool, editTool, bashTool, searchTool, planTool}, nil
 }
 
 // wrapTool turns operational errors into tool output ("ERROR: ...") so the

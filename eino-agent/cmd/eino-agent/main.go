@@ -12,13 +12,17 @@ import (
 	"syscall"
 	"time"
 
+	einomodel "github.com/cloudwego/eino/components/model"
 	"github.com/cloudwego/eino/schema"
 
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/agent"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/approval"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/memory"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/model"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/summary"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/tools"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
@@ -68,11 +72,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		return 1
 	}
 
+	counter := contextmgr.NewCounter()
 	chatModel, err := model.New(ctx, cfg)
 	if err != nil {
 		u.Error("error: %v", err)
 		return 2
 	}
+	chatModel = model.NewUsageModel(chatModel, counter)
 
 	systemPrompt, err := agent.BuildSystemPrompt(ws, cfg.PermissionMode)
 	if err != nil {
@@ -93,6 +99,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 		SystemPrompt:  systemPrompt,
 		MaxSteps:      cfg.MaxSteps,
 		ContextTokens: cfg.ContextTokens,
+		Counter:       counter,
 		Stream:        !cfg.NoStream,
 		UI:            u,
 	})
@@ -102,11 +109,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer, isTTY bool) i
 	}
 
 	if cfg.Prompt != "" {
-		return runOnce(ctx, cfg.Prompt, sess, persist, cfg, runner, u)
+		return runOnce(ctx, cfg.Prompt, sess, persist, cfg, ws, runner, u)
 	}
 
 	printBanner(u, cfg, ws, sess)
-	return runREPL(ctx, stdin, stdout, sess, persist, cfg, runner, u)
+	return runREPL(ctx, stdin, stdout, sess, persist, cfg, ws, chatModel, counter, runner, u)
 }
 
 func loadOrCreateSession(cfg *config.Config, ws *workspace.Workspace, u *ui.UI) (*session.Session, error) {
@@ -127,8 +134,8 @@ func loadOrCreateSession(cfg *config.Config, ws *workspace.Workspace, u *ui.UI) 
 	return s, nil
 }
 
-func runOnce(ctx context.Context, prompt string, sess *session.Session, persist bool, cfg *config.Config, runner *agent.Agent, u *ui.UI) int {
-	history := append(sess.SchemaMessages(), schema.UserMessage(prompt))
+func runOnce(ctx context.Context, prompt string, sess *session.Session, persist bool, cfg *config.Config, ws *workspace.Workspace, runner *agent.Agent, u *ui.UI) int {
+	history := append(historyFor(sess, ws), schema.UserMessage(prompt))
 	final, err := runner.RunTurn(ctx, history)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -150,7 +157,17 @@ func runOnce(ctx context.Context, prompt string, sess *session.Session, persist 
 	return 0
 }
 
-func runREPL(ctx context.Context, stdin io.Reader, stdout io.Writer, sess *session.Session, persist bool, cfg *config.Config, runner *agent.Agent, u *ui.UI) int {
+type replDeps struct {
+	sess    *session.Session
+	cfg     *config.Config
+	ws      *workspace.Workspace
+	model   einomodel.BaseModel[*schema.Message]
+	counter *contextmgr.Counter
+	u       *ui.UI
+}
+
+func runREPL(ctx context.Context, stdin io.Reader, stdout io.Writer, sess *session.Session, persist bool, cfg *config.Config, ws *workspace.Workspace, chatModel einomodel.BaseModel[*schema.Message], counter *contextmgr.Counter, runner *agent.Agent, u *ui.UI) int {
+	deps := &replDeps{sess: sess, cfg: cfg, ws: ws, model: chatModel, counter: counter, u: u}
 	scanner := bufio.NewScanner(stdin)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
@@ -181,14 +198,14 @@ func runREPL(ctx context.Context, stdin io.Reader, stdout io.Writer, sess *sessi
 			if input == "" {
 				continue
 			}
-			if handled, code := handleSlashCommand(input, sess, u); handled {
+			if handled, code := handleSlashCommand(ctx, input, deps); handled {
 				if code >= 0 {
 					return code
 				}
 				continue
 			}
 
-			history := append(sess.SchemaMessages(), schema.UserMessage(input))
+			history := append(historyFor(sess, ws), schema.UserMessage(input))
 			final, err := runner.RunTurn(ctx, history)
 			if err != nil {
 				if ctx.Err() != nil {
@@ -213,27 +230,67 @@ func runREPL(ctx context.Context, stdin io.Reader, stdout io.Writer, sess *sessi
 
 // handleSlashCommand returns handled=true when input was a command. code is -1
 // to continue, or the process exit code to return.
-func handleSlashCommand(input string, sess *session.Session, u *ui.UI) (bool, int) {
+func handleSlashCommand(ctx context.Context, input string, d *replDeps) (bool, int) {
 	switch input {
 	case "/exit", "/quit":
 		return true, 0
 	case "/help":
-		u.Info("commands: /help  /clear  /session  /exit")
+		d.u.Info("commands: /help  /clear  /compact  /plan  /session  /exit")
 		return true, -1
 	case "/clear":
-		sess.Clear()
-		u.Info("conversation history cleared")
+		d.sess.Clear()
+		d.u.Info("conversation history and summary cleared")
+		return true, -1
+	case "/compact":
+		if err := compactSession(ctx, d); err != nil {
+			d.u.Error("compact: %v", err)
+		}
+		return true, -1
+	case "/plan":
+		path, _ := memory.Path(d.ws)
+		content, err := memory.Load(d.ws)
+		if err != nil {
+			d.u.Error("plan: %v", err)
+		} else if strings.TrimSpace(content) == "" {
+			d.u.Info("working memory is empty: %s", path)
+		} else {
+			d.u.Info("working memory: %s\n\n%s", path, content)
+		}
 		return true, -1
 	case "/session":
-		u.Info("session: %s\nfile: %s", sess.ID, sess.Path())
+		d.u.Info("session: %s\nfile: %s", d.sess.ID, d.sess.Path())
 		return true, -1
 	default:
 		if strings.HasPrefix(input, "/") {
-			u.Warn("unknown command %q; try /help", input)
+			d.u.Warn("unknown command %q; try /help", input)
 			return true, -1
 		}
 		return false, -1
 	}
+}
+
+func compactSession(ctx context.Context, d *replDeps) error {
+	before := d.sess.Bytes()
+	history := d.sess.SchemaMessagesWithSummary()
+	text, err := summary.Generate(ctx, d.model, history, d.cfg.ContextTokens/2, d.counter)
+	if err != nil {
+		return err
+	}
+	d.sess.Compact(text, 2)
+	d.sess.Trim(d.cfg.HistoryBytes)
+	if _, err := d.sess.Save(); err != nil {
+		return fmt.Errorf("save compacted session: %w", err)
+	}
+	d.u.Info("compacted session: %d -> %d bytes; summary saved", before, d.sess.Bytes())
+	return nil
+}
+
+func historyFor(sess *session.Session, ws *workspace.Workspace) []*schema.Message {
+	out := sess.SchemaMessagesWithSummary()
+	if msg := memory.HistoryMessage(ws); msg != nil {
+		out = append([]*schema.Message{msg}, out...)
+	}
+	return out
 }
 
 func printBanner(u *ui.UI, cfg *config.Config, ws *workspace.Workspace, sess *session.Session) {

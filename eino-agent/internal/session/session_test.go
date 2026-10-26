@@ -110,3 +110,26 @@ func TestSchemaMessages(t *testing.T) {
 		t.Fatalf("messages = %+v", msgs)
 	}
 }
+
+func TestCompactStoresSummaryAndKeepsRecent(t *testing.T) {
+	s, _ := New(t.TempDir(), "/ws", "openai", "m")
+	_ = s.Add("user", "old task")
+	_ = s.Add("assistant", "old answer")
+	_ = s.Add("user", "new task")
+	_ = s.Add("assistant", "new answer")
+	s.Compact("## Goal\nkeep going", 2)
+	if s.Summary == "" || len(s.Messages) != 2 {
+		t.Fatalf("summary=%q messages=%+v", s.Summary, s.Messages)
+	}
+	if s.Messages[0].Role != "user" || s.Messages[1].Content != "new answer" {
+		t.Fatalf("recent messages = %+v", s.Messages)
+	}
+	msgs := s.SchemaMessagesWithSummary()
+	if len(msgs) != 4 || msgs[0].Role != schema.User || !strings.Contains(msgs[0].Content, "keep going") {
+		t.Fatalf("messages with summary = %+v", msgs)
+	}
+	s.Clear()
+	if s.Summary != "" || len(s.Messages) != 0 {
+		t.Fatalf("clear left summary=%q messages=%+v", s.Summary, s.Messages)
+	}
+}
