@@ -395,20 +395,20 @@ func runREPL(ctx context.Context, cancel context.CancelFunc, sigCh <-chan os.Sig
 
 	for {
 		u.Prompt()
-		line, err := lines.ReadLine(ctx)
-		if err != nil {
+		raw, readErr := readUserInput(ctx, lines, stdout)
+		if readErr != nil {
 			if ctx.Err() != nil {
 				fmt.Fprintln(stdout)
 				return 130
 			}
-			if errors.Is(err, io.EOF) {
+			if errors.Is(readErr, io.EOF) {
 				fmt.Fprintln(stdout)
 				return 0
 			}
-			u.Error("input error: %v", err)
+			u.Error("input error: %v", readErr)
 			return 1
 		}
-		input := strings.TrimSpace(line)
+		input := strings.TrimSpace(raw)
 		if input == "" {
 			continue
 		}
@@ -431,11 +431,11 @@ func runREPL(ctx context.Context, cancel context.CancelFunc, sigCh <-chan os.Sig
 		turnCancel = nil
 		wasInterrupted := interrupted
 		mu.Unlock()
+		if wasInterrupted && ctx.Err() == nil {
+			u.Warn("turn interrupted; partial work was not saved (Ctrl-C again to exit)")
+			continue
+		}
 		if err != nil {
-			if wasInterrupted && ctx.Err() == nil {
-				u.Warn("turn interrupted; partial work was not saved")
-				continue
-			}
 			if ctx.Err() != nil {
 				return 130
 			}
@@ -453,6 +453,37 @@ func runREPL(ctx context.Context, cancel context.CancelFunc, sigCh <-chan os.Sig
 			}
 		}
 	}
+}
+
+// readUserInput supports a trailing backslash as an explicit multi-line
+// continuation. It keeps the prompt and the reader in the same goroutine, so
+// the REPL still owns stdin.
+func readUserInput(ctx context.Context, lines *input.Source, stdout io.Writer) (string, error) {
+	line, err := lines.ReadLine(ctx)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	b.WriteString(line)
+	for {
+		trimmed := strings.TrimRight(b.String(), "\r")
+		if !strings.HasSuffix(trimmed, "\\") {
+			break
+		}
+		b.Reset()
+		b.WriteString(strings.TrimSuffix(trimmed, "\\"))
+		fmt.Fprint(stdout, "... ")
+		next, err := lines.ReadLine(ctx)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return b.String(), nil
+			}
+			return b.String(), err
+		}
+		b.WriteString("\n")
+		b.WriteString(next)
+	}
+	return b.String(), nil
 }
 
 // handleSlashCommand returns handled=true when input was a command. code is -1

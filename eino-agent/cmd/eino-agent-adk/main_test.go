@@ -11,6 +11,7 @@ import (
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/budget"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/input"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/memory"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
@@ -267,5 +268,16 @@ func TestADKSlashTraceSummary(t *testing.T) {
 	handled, code := handleSlashCommand(context.Background(), "/trace", d)
 	if !handled || code != -1 || !strings.Contains(out.String(), "tokens=10") {
 		t.Fatalf("handled=%v code=%d out=%q", handled, code, out.String())
+	}
+}
+
+func TestADKReadUserInputContinuation(t *testing.T) {
+	var out bytes.Buffer
+	got, err := readUserInput(context.Background(), input.New(strings.NewReader("first line\\\nsecond line\n")), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "first line\nsecond line" || !strings.Contains(out.String(), "... ") {
+		t.Fatalf("got=%q prompt=%q", got, out.String())
 	}
 }
