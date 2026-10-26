@@ -14,6 +14,7 @@ import (
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/budget"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/config"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/contextmgr"
+	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/memory"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/session"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/ui"
 	"github.com/morehao/how-to-build-a-coding-agent/eino-agent/internal/workspace"
@@ -329,5 +330,29 @@ func TestHooksRunAroundToolCalls(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(dir, "hook.log"))
 	if err != nil || string(data) != "beforeafter" {
 		t.Fatalf("hook.log=%q err=%v", string(data), err)
+	}
+}
+
+func TestSlashRecall(t *testing.T) {
+	dir := t.TempDir()
+	ws, err := workspace.New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := memory.Save(ws, "decided to use WAL for sqlite"); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	d := &replDeps{
+		sess:    &session.Session{ID: "current"},
+		cfg:     &config.Config{SessionDir: dir},
+		ws:      ws,
+		counter: contextmgr.NewCounter(),
+		budget:  budget.New(0),
+		u:       ui.New(&out, &errOut, false, false),
+	}
+	handled, code := handleSlashCommand(context.Background(), "/recall WAL", d)
+	if !handled || code != -1 || !strings.Contains(out.String(), "WAL") {
+		t.Fatalf("handled=%v code=%d out=%q", handled, code, out.String())
 	}
 }

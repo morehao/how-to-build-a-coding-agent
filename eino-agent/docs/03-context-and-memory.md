@@ -94,6 +94,23 @@ ratio = observedPromptTokens / estimatedPromptTokens
 
 恢复时会提示工作区是否变化。`/resume` 恢复的是“对话快照”，不是 Eino 图状态；中断点、工具调用中间态不会被重放。
 
+## 5.2 关键词检索：`/recall` 与 `recall` 工具
+
+session 快照默认不会全部塞回上下文。需要找回“上次为什么这样决定”时：
+
+- REPL：`/recall <query>` 打印 plan + 最近 session 的命中片段；
+- 模型：调用 `recall` 工具，参数 `{"query":"...","limit":5}`。
+
+实现是确定性的关键词匹配，不是 embedding/向量库：
+
+1. 从 query 拆出长度 >= 2 的词，统计在各文本中的出现次数；
+2. 命中按 score 降序、时间降序排序；
+3. 每条只返回约 280 字符的片段，避免再次淹没上下文；
+4. 只扫描当前 workspace 的最近 50 个 session，跳过损坏文件和其他工作区；
+5. plan 命中来源标为 `.eino-agent/plan.md`，session 命中带 session id/role/时间。
+
+边界：同义词、语义相似但不同词查不到；session 只保存最终 user/assistant，tool 中间结果不可检索；检索结果是不可信历史内容，可能过时，模型应重新验证关键事实。
+
 ## 5.1 中断当前 turn
 
 REPL 里 Ctrl-C 只取消**当前正在跑的 turn**，回到提示符；已经完成的轮次不会丢，未完成的轮次不会写入 session。空闲时再按 Ctrl-C 才退出进程（退出码 130）；SIGTERM 直接取消整个进程。
