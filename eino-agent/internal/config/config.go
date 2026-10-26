@@ -53,19 +53,22 @@ type Config struct {
 	ShowVersion    bool
 
 	// New in v2.
-	Script           string
-	Trace            string
-	NoCheckpoints    bool
-	NoReadBeforeEdit bool
-	AllowSensitive   bool
-	AllowEnv         bool
-	MaxRetries       int
-	RetryBaseMS      int
-	MaxTotalTokens   int
-	MaxTokens        int
-	MCPConfig        string
-	SkillsDir        string
-	NoSkills         bool
+	Script            string
+	Trace             string
+	NoCheckpoints     bool
+	NoReadBeforeEdit  bool
+	PermissionRules   string
+	NoPermissionRules bool
+	HooksPath         string
+	AllowSensitive    bool
+	AllowEnv          bool
+	MaxRetries        int
+	RetryBaseMS       int
+	MaxTotalTokens    int
+	MaxTokens         int
+	MCPConfig         string
+	SkillsDir         string
+	NoSkills          bool
 }
 
 // ErrHelp is returned when the user requested usage information.
@@ -100,6 +103,9 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 		tracePath        string
 		noCheckpoints    bool
 		noReadBeforeEdit bool
+		permissionRules  string
+		noRules          bool
+		hooksPath        string
 		allowSensitive   bool
 		allowEnv         bool
 		maxRetries       int
@@ -130,6 +136,9 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	fs.StringVar(&tracePath, "trace", "", "write a JSONL trace of this run to a file")
 	fs.BoolVar(&noCheckpoints, "no-checkpoints", false, "disable file snapshots used by /undo")
 	fs.BoolVar(&noReadBeforeEdit, "no-read-before-edit", false, "allow edit_file/apply_patch without a prior read")
+	fs.StringVar(&permissionRules, "permission-rules", "", "JSON allow/deny rules (default: .eino-agent/permissions.json)")
+	fs.BoolVar(&noRules, "no-permission-rules", false, "do not load permission rules")
+	fs.StringVar(&hooksPath, "hooks", "", "opt-in JSON tool hooks file")
 	fs.BoolVar(&allowSensitive, "allow-sensitive", false, "allow reading .env, keys and credentials files")
 	fs.BoolVar(&allowEnv, "allow-env", false, "pass the full environment (including API keys) to bash")
 	fs.IntVar(&maxRetries, "max-retries", 0, "retry model calls on 429/5xx/timeouts (default: 2)")
@@ -272,6 +281,9 @@ func Parse(args []string, getenv func(string) string) (*Config, error) {
 	cfg.NoReadBeforeEdit = boolValue(visited["no-read-before-edit"], noReadBeforeEdit, getenv("EINO_AGENT_NO_READ_BEFORE_EDIT"))
 	cfg.AllowSensitive = boolValue(visited["allow-sensitive"], allowSensitive, getenv("EINO_AGENT_ALLOW_SENSITIVE"))
 	cfg.AllowEnv = boolValue(visited["allow-env"], allowEnv, getenv("EINO_AGENT_ALLOW_ENV"))
+	cfg.PermissionRules = firstNonEmpty(permissionRules, getenv("EINO_AGENT_PERMISSION_RULES"), ".eino-agent/permissions.json")
+	cfg.NoPermissionRules = boolValue(visited["no-permission-rules"], noRules, getenv("EINO_AGENT_NO_PERMISSION_RULES"))
+	cfg.HooksPath = firstNonEmpty(hooksPath, getenv("EINO_AGENT_HOOKS"))
 
 	cfg.Trace = firstNonEmpty(tracePath, getenv("EINO_AGENT_TRACE"))
 	if cfg.Trace != "" {
@@ -367,7 +379,9 @@ Environment:
   EINO_AGENT_SKILLS_DIR, EINO_AGENT_NO_SKILLS,
   EINO_AGENT_MAX_RETRIES, EINO_AGENT_RETRY_BASE_MS, EINO_AGENT_MAX_TOTAL_TOKENS,
   EINO_AGENT_MAX_TOKENS, EINO_AGENT_NO_CHECKPOINTS, EINO_AGENT_NO_READ_BEFORE_EDIT,
-  EINO_AGENT_ALLOW_SENSITIVE, EINO_AGENT_ALLOW_ENV
+  EINO_AGENT_ALLOW_SENSITIVE, EINO_AGENT_ALLOW_ENV,
+  EINO_AGENT_PERMISSION_RULES, EINO_AGENT_NO_PERMISSION_RULES,
+  EINO_AGENT_HOOKS
 
 Provider credentials:
   openai:  OPENAI_API_KEY,  optional OPENAI_BASE_URL,  OPENAI_MODEL

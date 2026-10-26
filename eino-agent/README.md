@@ -86,6 +86,9 @@ REPL 命令：
 | `--mcp-config` | MCP server JSON 配置 | 无 |
 | `--skills-dir` | `SKILL.md` 技能目录 | `skills` |
 | `--no-skills` | 关闭工作区技能 | 开启 |
+| `--permission-rules` | allow/deny 规则 JSON | `.eino-agent/permissions.json` |
+| `--no-permission-rules` | 不加载权限规则 | 加载 |
+| `--hooks` | 启用 tool hooks 的 JSON 文件 | 关闭 |
 
 退出码：`0` 成功，`1` 运行时错误，`2` 配置/用法错误，`130` SIGINT。
 
@@ -127,6 +130,10 @@ description: Review a Go diff for correctness, error paths and missing tests.
 ```
 
 Skill 是仓库内容，不是系统指令：它不能覆盖审批/安全规则，也不会获得额外工具权限。完整格式、fork、安全和边界见 [`docs/skills.md`](docs/skills.md)。
+
+## 权限规则与 Hooks
+
+`.eino-agent/permissions.json` 可以按工具/命令/路径配置 allow/deny；deny 优先且约束 `yolo`，allow 只跳过弹窗，不会把 `read-only` 变成可写。`--hooks <file>` 是显式 opt-in 的 tool 前后 shell hook，默认不执行；hook 用 sanitized env、workspace cwd，并带超时。详见 [`docs/permissions-and-hooks.md`](docs/permissions-and-hooks.md)。
 
 ## 安全边界
 
@@ -231,6 +238,7 @@ cmd/eino-agent/main.go
         ├── internal/budget      token 预算
         ├── internal/retry       指数退避
         ├── internal/skill       SKILL.md 加载 + 渐进式披露
+        ├── internal/hooks       opt-in tool before/after hooks
         ├── internal/subagent    只读嵌套 runner + task
         ├── internal/mcp         stdio MCP 工具
         ├── internal/agent       Eino ReAct + prompt + callbacks

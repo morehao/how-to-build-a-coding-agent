@@ -72,6 +72,7 @@ type Terminal struct {
 	isTTY  bool
 	mu     sync.Mutex
 	always map[string]struct{}
+	rules  *RuleSet
 }
 
 // New creates an approver for the given permission mode. It owns a private
@@ -94,6 +95,10 @@ func NewWithSource(mode string, lines input.LineReader, out io.Writer, isTTY boo
 	}
 }
 
+// SetRules installs persistent allow/deny rules. Call during startup. Deny
+// rules are evaluated before the permission mode, so they also constrain yolo.
+func (t *Terminal) SetRules(rules *RuleSet) { t.rules = rules }
+
 // Approve applies the permission mode and, in ask mode, prompts the user.
 func (t *Terminal) Approve(ctx context.Context, req Request) (Decision, error) {
 	if err := ctx.Err(); err != nil {
@@ -103,12 +108,25 @@ func (t *Terminal) Approve(ctx context.Context, req Request) (Decision, error) {
 	if kind == "" {
 		kind = KindBash
 	}
+	if t.rules != nil {
+		if rule, ok := t.rules.Denied(req); ok {
+			fmt.Fprintf(t.out, "[approval] denied by rule: %s\n", sanitize(rule.String()))
+			return Deny, nil
+		}
+	}
 	switch t.mode {
 	case config.PermissionYolo:
 		return Once, nil
 	case config.PermissionReadOnly:
 		fmt.Fprintf(t.out, "[approval] denied %s: privileged actions are disabled in read-only mode\n", kind)
 		return Deny, nil
+	}
+
+	if t.rules != nil {
+		if rule, ok := t.rules.Allowed(req); ok {
+			fmt.Fprintf(t.out, "[approval] allowed by rule: %s\n", sanitize(rule.String()))
+			return Once, nil
+		}
 	}
 
 	if !t.isTTY {

@@ -171,3 +171,34 @@ func TestParseSkillsDefaultsAndFlags(t *testing.T) {
 		t.Fatalf("skills flags = %q/%v", cfg.SkillsDir, cfg.NoSkills)
 	}
 }
+
+func TestParsePermissionRulesAndHooks(t *testing.T) {
+	base := map[string]string{
+		"OPENAI_API_KEY":       "sk",
+		"OPENAI_MODEL":         "m",
+		"EINO_AGENT_WORKSPACE": t.TempDir(),
+	}
+	cfg, err := Parse(nil, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PermissionRules != ".eino-agent/permissions.json" || cfg.NoPermissionRules || cfg.HooksPath != "" {
+		t.Fatalf("policy defaults: %+v", cfg)
+	}
+	base["EINO_AGENT_PERMISSION_RULES"] = "team/rules.json"
+	base["EINO_AGENT_HOOKS"] = "team/hooks.json"
+	cfg, err = Parse(nil, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PermissionRules != "team/rules.json" || cfg.HooksPath != "team/hooks.json" {
+		t.Fatalf("policy env: %+v", cfg)
+	}
+	cfg, err = Parse([]string{"--permission-rules", "x.json", "--no-permission-rules", "--hooks", "h.json"}, env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PermissionRules != "x.json" || !cfg.NoPermissionRules || cfg.HooksPath != "h.json" {
+		t.Fatalf("policy flags: %+v", cfg)
+	}
+}
