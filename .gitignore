@@ -19,3 +19,7 @@ read_verbose
 
 # demo files
 fizzbuzz.js
+
+# local agent state
+.eino-agent/
+.dsh/

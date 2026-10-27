@@ -1,0 +1,16 @@
+{
+  "name": "max_steps",
+  "max_steps": 4,
+  "script": {
+    "name": "loop",
+    "steps": [
+      {"tool_calls": [{"name": "list_files", "arguments": "{}"}]},
+      {"tool_calls": [{"name": "list_files", "arguments": "{}"}]},
+      {"tool_calls": [{"name": "list_files", "arguments": "{}"}]},
+      {"tool_calls": [{"name": "list_files", "arguments": "{}"}]},
+      {"tool_calls": [{"name": "list_files", "arguments": "{}"}]}
+    ]
+  },
+  "input": "keep listing",
+  "expect": {"expect_error": true, "error_contains": "max"}
+}

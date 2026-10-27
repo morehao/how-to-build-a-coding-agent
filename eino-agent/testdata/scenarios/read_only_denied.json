@@ -1,0 +1,18 @@
+{
+  "name": "read_only_denied",
+  "files": {"hello.txt": "hello\n"},
+  "permission_mode": "read-only",
+  "script": {
+    "name": "denied-edit",
+    "steps": [
+      {"tool_calls": [{"name": "edit_file", "arguments": "{\"path\":\"hello.txt\",\"old_str\":\"hello\",\"new_str\":\"goodbye\"}"}]},
+      {"content": "the edit was denied"}
+    ]
+  },
+  "input": "edit hello.txt",
+  "expect": {
+    "final_contains": ["denied"],
+    "tools": ["edit_file"],
+    "files": {"hello.txt": "hello\n"}
+  }
+}

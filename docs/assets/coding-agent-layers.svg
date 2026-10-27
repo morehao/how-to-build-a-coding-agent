@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 792" font-family="ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
+  <title>一个 coding agent 的六层架构：从入口到边界，依赖只能向下</title>
+  <desc>这张图把 eino-agent 的 30 个 Go 包按职责分成六层。第 0 层是入口与配置，第 1 层是编排，把一次用户请求驱动成多轮 ReAct 循环；第 2 层是模型接入，负责 provider 抽象、重试和 token 预算；第 3 层是上下文，负责历史压缩、工作记忆和持久化；第 4 层是工具与扩展，是 agent 唯一能作用于外部世界的出口；第 5 层是边界，负责工作区围栏、审批、敏感信息策略、文件状态和沙箱。左侧竖条标出编译期的依赖方向：上层可以调用下层，下层不得反向引用上层，因此红线缺口的同层依赖只有两处例外。读者应从中看出，越靠近边界的层越应该独立可测，而 agent 的智能集中在第 1 层之下、第 2 层之上的循环里。</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)" />
+    </marker>
+  </defs>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f8fafc;
+      --fg: #172033;
+      --muted: #5b6475;
+      --line: #64748b;
+      --neutral: #e2e8f0;
+      --input: #bfdbfe;
+      --process: #c7d2fe;
+      --storage: #99f6e4;
+      --external: #fde68a;
+      --risk: #fecaca;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #0f172a;
+        --fg: #e5e7eb;
+        --muted: #a3adbd;
+        --line: #94a3b8;
+        --neutral: #334155;
+        --input: #1d4ed8;
+        --process: #4338ca;
+        --storage: #0f766e;
+        --external: #92400e;
+        --risk: #991b1b;
+      }
+    }
+    svg { background: var(--bg); }
+    .title { font-size: 20px; font-weight: 650; fill: var(--fg); }
+    .subtitle { font-size: 13px; fill: var(--muted); }
+    .label { font-size: 13px; font-weight: 600; fill: var(--fg); }
+    .pkg { font-size: 11.5px; fill: var(--fg); }
+    .small { font-size: 11px; fill: var(--muted); }
+    .layertitle { font-size: 12px; font-weight: 650; fill: var(--fg); }
+    .node { stroke: var(--line); stroke-width: 1; }
+    .neutral { fill: var(--neutral); }
+    .input { fill: var(--input); }
+    .process { fill: var(--process); }
+    .storage { fill: var(--storage); }
+    .external { fill: var(--external); }
+    .risk { fill: var(--risk); }
+    .edge { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .edge-arrow { marker-end: url(#arrow); }
+    .zone { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 6 5; opacity: 0.75; }
+  </style>
+
+  <rect x="0" y="0" width="1200" height="792" fill="var(--bg)" />
+
+  <!-- 标题 -->
+  <text x="40" y="42" class="title">一个 coding agent 的六层架构</text>
+  <text x="40" y="64" class="subtitle">以 eino-agent 的 30 个 Go 包（15.2k 行）为例：职责分层 + 编译期依赖方向</text>
+
+  <!-- 依赖方向竖条：全程在区域左侧留白内 -->
+  <line x1="36" y1="118" x2="36" y2="726" class="edge edge-arrow" />
+  <text x="18" y="102" class="small">依赖方向</text>
+  <text x="18" y="744" class="small">上层 → 下层</text>
+
+  <!-- 层级区域背景 -->
+  <rect x="80" y="96" width="1080" height="88" class="zone" />
+  <rect x="80" y="196" width="1080" height="88" class="zone" />
+  <rect x="80" y="296" width="1080" height="88" class="zone" />
+  <rect x="80" y="396" width="1080" height="88" class="zone" />
+  <rect x="80" y="496" width="1080" height="88" class="zone" />
+  <rect x="80" y="596" width="1080" height="128" class="zone" />
+
+  <text x="96" y="118" class="layertitle">第 0 层 · 入口与配置</text>
+  <text x="96" y="218" class="layertitle">第 1 层 · 编排</text>
+  <text x="96" y="318" class="layertitle">第 2 层 · 模型接入</text>
+  <text x="96" y="418" class="layertitle">第 3 层 · 上下文</text>
+  <text x="96" y="518" class="layertitle">第 4 层 · 工具与扩展</text>
+  <text x="96" y="618" class="layertitle">第 5 层 · 边界</text>
+
+  <!-- 第 0 层 -->
+  <rect x="300" y="128" width="200" height="44" rx="6" class="node input" />
+  <text x="324" y="148" class="pkg">cmd/eino-agent</text>
+  <text x="324" y="163" class="small">ReAct 入口 · REPL</text>
+  <rect x="520" y="128" width="200" height="44" rx="6" class="node input" />
+  <text x="544" y="148" class="pkg">cmd/eino-agent-adk</text>
+  <text x="544" y="163" class="small">ADK 入口 · 同一套 CLI</text>
+  <rect x="740" y="128" width="160" height="44" rx="6" class="node input" />
+  <text x="764" y="148" class="pkg">internal/config</text>
+  <text x="764" y="163" class="small">flag + env</text>
+  <rect x="920" y="128" width="160" height="44" rx="6" class="node input" />
+  <text x="944" y="148" class="pkg">internal/input</text>
+  <text x="944" y="163" class="small">stdin 单所有者</text>
+
+  <!-- 第 1 层 -->
+  <rect x="300" y="228" width="200" height="44" rx="6" class="node process" />
+  <text x="324" y="248" class="pkg">internal/agent</text>
+  <text x="324" y="263" class="small">ReAct graph + prompt</text>
+  <rect x="520" y="228" width="200" height="44" rx="6" class="node process" />
+  <text x="544" y="248" class="pkg">internal/agentadk</text>
+  <text x="544" y="263" class="small">ChatModelAgent + Runner</text>
+  <rect x="740" y="228" width="160" height="44" rx="6" class="node process" />
+  <text x="764" y="248" class="pkg">internal/ui</text>
+  <text x="764" y="263" class="small">终端渲染</text>
+  <rect x="920" y="228" width="160" height="44" rx="6" class="node process" />
+  <text x="944" y="248" class="pkg">internal/summary</text>
+  <text x="944" y="263" class="small">/compact</text>
+
+  <!-- 第 2 层 -->
+  <rect x="300" y="328" width="200" height="44" rx="6" class="node external" />
+  <text x="324" y="348" class="pkg">internal/model</text>
+  <text x="324" y="363" class="small">openai/claude/ark/fake</text>
+  <rect x="520" y="328" width="160" height="44" rx="6" class="node external" />
+  <text x="544" y="348" class="pkg">internal/retry</text>
+  <text x="544" y="363" class="small">指数退避</text>
+  <rect x="700" y="328" width="160" height="44" rx="6" class="node external" />
+  <text x="724" y="348" class="pkg">internal/budget</text>
+  <text x="724" y="363" class="small">token 预算</text>
+  <rect x="880" y="328" width="200" height="44" rx="6" class="node external" />
+  <text x="904" y="348" class="pkg">internal/skill</text>
+  <text x="904" y="363" class="small">SKILL.md 渐进披露</text>
+
+  <!-- 第 3 层 -->
+  <rect x="300" y="428" width="200" height="44" rx="6" class="node storage" />
+  <text x="324" y="448" class="pkg">internal/contextmgr</text>
+  <text x="324" y="463" class="small">确定性压缩 + 配对</text>
+  <rect x="520" y="428" width="160" height="44" rx="6" class="node storage" />
+  <text x="544" y="448" class="pkg">internal/session</text>
+  <text x="544" y="463" class="small">JSON 快照</text>
+  <rect x="700" y="428" width="160" height="44" rx="6" class="node storage" />
+  <text x="724" y="448" class="pkg">internal/memory</text>
+  <text x="724" y="463" class="small">plan 工作记忆</text>
+  <rect x="880" y="428" width="200" height="44" rx="6" class="node storage" />
+  <text x="904" y="448" class="pkg">internal/trace</text>
+  <text x="904" y="463" class="small">JSONL 事件 · 脱敏</text>
+
+  <!-- 第 4 层 -->
+  <rect x="300" y="528" width="200" height="44" rx="6" class="node neutral" />
+  <text x="324" y="548" class="pkg">internal/tools</text>
+  <text x="324" y="563" class="small">9 个内置工具</text>
+  <rect x="520" y="528" width="160" height="44" rx="6" class="node neutral" />
+  <text x="544" y="548" class="pkg">internal/patch</text>
+  <text x="544" y="563" class="small">unified diff</text>
+  <rect x="700" y="528" width="160" height="44" rx="6" class="node neutral" />
+  <text x="724" y="548" class="pkg">internal/repomap</text>
+  <text x="724" y="563" class="small">仓库地图</text>
+  <rect x="880" y="528" width="120" height="44" rx="6" class="node neutral" />
+  <text x="904" y="548" class="pkg">internal/mcp</text>
+  <text x="904" y="563" class="small">stdio</text>
+  <rect x="1010" y="528" width="120" height="44" rx="6" class="node neutral" />
+  <text x="1034" y="548" class="pkg">subagent</text>
+  <text x="1034" y="563" class="small">task/tasks</text>
+
+  <!-- 第 5 层 -->
+  <rect x="300" y="628" width="200" height="44" rx="6" class="node risk" />
+  <text x="324" y="648" class="pkg">internal/workspace</text>
+  <text x="324" y="663" class="small">路径围栏 + ignore</text>
+  <rect x="520" y="628" width="160" height="44" rx="6" class="node risk" />
+  <text x="544" y="648" class="pkg">internal/approval</text>
+  <text x="544" y="663" class="small">ask/read-only/yolo</text>
+  <rect x="700" y="628" width="160" height="44" rx="6" class="node risk" />
+  <text x="724" y="648" class="pkg">internal/policy</text>
+  <text x="724" y="663" class="small">敏感文件/环境变量</text>
+  <rect x="880" y="628" width="120" height="44" rx="6" class="node risk" />
+  <text x="904" y="648" class="pkg">filestate</text>
+  <text x="904" y="663" class="small">读后写</text>
+  <rect x="1010" y="628" width="120" height="44" rx="6" class="node risk" />
+  <text x="1034" y="648" class="pkg">sandbox</text>
+  <text x="1034" y="663" class="small">OS 隔离</text>
+  <rect x="300" y="684" width="200" height="32" rx="6" class="node risk" />
+  <text x="324" y="705" class="pkg">internal/checkpoint</text>
+  <rect x="520" y="684" width="160" height="32" rx="6" class="node risk" />
+  <text x="544" y="705" class="pkg">internal/eval</text>
+  <rect x="700" y="684" width="160" height="32" rx="6" class="node risk" />
+  <text x="724" y="705" class="pkg">internal/hooks</text>
+  <rect x="880" y="684" width="250" height="32" rx="6" class="node risk" />
+  <text x="904" y="705" class="pkg">（eval/hooks 只被上层与测试引用）</text>
+
+  <!-- 图例 -->
+  <text x="20" y="772" class="small">同层例外只有 3 处：subagent → agent/agentadk（复用 runner）、mcp → approval（逐次审批）、config ↔ contextmgr（预算默认值）。</text>
+</svg>

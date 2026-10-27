@@ -1,0 +1,4 @@
+/eino-agent
+/eino-agent-adk
+*.test
+.eino-agent/
